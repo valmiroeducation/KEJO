@@ -1,251 +1,783 @@
-/* KEJO-TYYPPINEN KENTTÄTILANNE — EPÄVIRALLINEN JULKINEN KÄYTTÖLIITTYMÄMALLI
-   Ei yhteyttä KEJOon, ERICAan, VIRVEen, TUVEen tai muihin viranomaisjärjestelmiin.
-   Kaikki alkutiedot ovat kuvitteellisia. Tallennus tehdään vain selaimen localStorageen.
+/*
+ KENTTÄTYÖASEMA v3.0 — epävirallinen KEJO-tyyppinen käyttöliittymämalli
+ Ei viranomaisten käyttöön, ei tuotantotehtäviin, ei ERICA/KEJO/VIRVE-integraatiota.
+ Demotiedot kuvitteellisia. Julkiset yksikkötunnusesimerkit eivät kuvaa reaaliaikaista valmiutta.
+ Kartan Syke-syvyysaineisto ei ole navigointiin soveltuva virallinen merikartta.
 */
 (() => {
 'use strict';
-const STORAGE_KEY='kejo_local_workspace_v2';
-const AGENCIES={pelastus:'Pelastustoimi',ensihoito:'Ensihoito',poliisi:'Poliisi'};
-const ST={vapaa:'Vapaa',halytys:'Hälytetty',matkalla:'Matkalla',kohteessa:'Kohteessa',varattu:'Varattu'};
-const $=(selector,ctx=document)=>ctx.querySelector(selector);
-const $$=(selector,ctx=document)=>[...ctx.querySelectorAll(selector)];
-const pad=n=>String(n).padStart(2,'0');
-const time=t=>new Date(t).toLocaleTimeString('fi-FI',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-const shortTime=t=>new Date(t).toLocaleTimeString('fi-FI',{hour:'2-digit',minute:'2-digit'});
-const dateTime=t=>new Date(t).toLocaleString('fi-FI');
-const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const validCoord=(a,b)=>Number.isFinite(Number(a))&&Number.isFinite(Number(b))&&Math.abs(Number(a))<=90&&Math.abs(Number(b))<=180;
-const id=()=>String(Date.now()).slice(-9)+Math.random().toString(36).slice(2,6);
-const stamp=(mins=0)=>new Date(Date.now()-mins*60000).toISOString();
-function initialState(){
-  const incidents=[
-    {id:'T-260401',time:stamp(19),code:'402',title:'Rakennuspalo',address:'Kauppakatu, Joensuu',priority:'A',agency:'pelastus',status:'avoin',lat:62.6034,lng:29.7621,description:'Kuvitteellinen ilmoitus: savuhavainto rakennuksen porrashuoneessa.',units:['RPK131','RPK132'],source:'Mallitehtävä'},
-    {id:'T-260402',time:stamp(12),code:'700',title:'Äkillinen sairastuminen',address:'Noljakantie, Joensuu',priority:'B',agency:'ensihoito',status:'avoin',lat:62.6180,lng:29.7190,description:'Kuvitteellinen tehtävä. Ei todellisia potilastietoja.',units:['EPK101'],source:'Mallitehtävä'},
-    {id:'T-260403',time:stamp(8),code:'202',title:'Liikenneonnettomuus',address:'Kuopiontie, Joensuu',priority:'B',agency:'pelastus',status:'avoin',lat:62.6250,lng:29.7571,description:'Kuvitteellinen liikennetapahtuma, kaksi ajoneuvoa.',units:[],source:'Mallitehtävä'},
-    {id:'T-260404',time:stamp(4),code:'123',title:'Häiriötehtävä',address:'Rantakatu, Joensuu',priority:'C',agency:'poliisi',status:'avoin',lat:62.6009,lng:29.7691,description:'Kuvitteellinen poliisitehtävä. Ei henkilötietoja.',units:['IP 310'],source:'Mallitehtävä'}
+const DATA = window.KEJO_DATA;
+const $ = (s, root = document) => root.querySelector(s);
+const $$ = (s, root = document) => Array.from(root.querySelectorAll(s));
+const STORAGE = 'kenttatyoasema_v3_2026';
+const agencies = {pelastus:'Pelastustoimi',ensihoito:'Ensihoito',poliisi:'Poliisi'};
+const statuses = {free:'Vapaa',alerted:'Hälytetty',enroute:'Matkalla',onscene:'Kohteessa',busy:'Varattu',unavailable:'Ei käytettävissä'};
+const esc = v => String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+const formatClock = stamp => new Date(stamp).toLocaleTimeString('fi-FI',{hour:'2-digit',minute:'2-digit'});
+const formatDate = stamp => new Date(stamp).toLocaleString('fi-FI');
+const timeOffset = minutes => new Date(Date.now() - minutes * 60000).toISOString();
+const makeId = prefix => `${prefix}-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2,6).toUpperCase()}`;
+const validPos = (lat,lng) => Number.isFinite(+lat) && Number.isFinite(+lng) && +lat >= -90 && +lat <= 90 && +lng >= -180 && +lng <= 180 && String(lat).trim()!=='' && String(lng).trim()!=='';
+const center = [62.6047,29.7597];
+const defaults = () => {
+  const units = DATA.baseUnits.map((item,index) => ({
+    ...structuredClone(item), id:makeId('U'), status:index===1?'onscene':index===0?'enroute':'free',
+    taskId:null, createdAt:timeOffset(34-index)
+  }));
+  const incidents = [
+    {id:'T-2026-1001',createdAt:timeOffset(31),agency:'pelastus',code:'402',title:'Rakennuspalo: keskisuuri',priority:'A',address:'Kauppakatu, Joensuu (kuvitteellinen)',lat:62.6018,lng:29.7630,status:'active',description:'Mallitehtävä: savua rakennuksen yläkerroksessa.', commander:'',notes:''},
+    {id:'T-2026-1002',createdAt:timeOffset(20),agency:'ensihoito',code:'703',title:'Hengitysvaikeus',priority:'B',address:'Noljakka, Joensuu (kuvitteellinen)',lat:62.6198,lng:29.7197,status:'active',description:'Mallitehtävä ilman todellisia potilastietoja.',commander:'',notes:''},
+    {id:'T-2026-1003',createdAt:timeOffset(10),agency:'pelastus',code:'422',title:'Maastopalo: keskisuuri',priority:'B',address:'Reijola, Joensuu (kuvitteellinen)',lat:62.5529,lng:29.8051,status:'active',description:'Mallitehtävä: palo metsän reunassa.',commander:'',notes:''}
   ];
-  const units=[
-    {id:'RPK131',agency:'pelastus',type:'Sammutusyksikkö',status:'kohteessa',lat:62.6046,lng:29.7610},
-    {id:'RPK132',agency:'pelastus',type:'Säiliöyksikkö',status:'matkalla',lat:62.6142,lng:29.7601},
-    {id:'RPK301',agency:'pelastus',type:'Pelastusyksikkö',status:'vapaa',lat:62.5891,lng:29.7552},
-    {id:'EPK101',agency:'ensihoito',type:'Ensihoitoyksikkö',status:'kohteessa',lat:62.6164,lng:29.7216},
-    {id:'EPK102',agency:'ensihoito',type:'Ensihoitoyksikkö',status:'vapaa',lat:62.5945,lng:29.7712},
-    {id:'EPK103',agency:'ensihoito',type:'Ensihoitoyksikkö',status:'vapaa',lat:62.6107,lng:29.7966},
-    {id:'IP 310',agency:'poliisi',type:'Poliisipartio',status:'matkalla',lat:62.5996,lng:29.7802},
-    {id:'IP 311',agency:'poliisi',type:'Poliisipartio',status:'vapaa',lat:62.6097,lng:29.7727}
-  ];
-  const logs=[
-    {id:id(),time:stamp(18),target:'RPK131',message:'Yksikön tila: Kohteessa'},
-    {id:id(),time:stamp(17),target:'T-260401',message:'Tilannetieto päivitetty (mallitieto)'},
-    {id:id(),time:stamp(12),target:'T-260402',message:'Tehtävä vastaanotettu'},
-    {id:id(),time:stamp(8),target:'T-260403',message:'Tehtävä vastaanotettu'},
-    {id:id(),time:stamp(4),target:'T-260404',message:'Tehtävä vastaanotettu'}
-  ];
-  return {incidents,units,logs,selected:{type:'incident',id:'T-260401'},agencyFilter:'all',showClosed:false,freeOnly:false,search:'',logSearch:'',detailTab:'info',map:{units:true,tasks:true},view:'tilannekuva'};
+  units[1].taskId = incidents[2].id;
+  units[0].taskId = incidents[0].id;
+  return {
+    incidents, units,
+    events:[
+      {id:makeId('L'),at:timeOffset(31),target:incidents[0].id,text:'Tehtävä vastaanotettu (mallitieto)'},
+      {id:makeId('L'),at:timeOffset(20),target:incidents[1].id,text:'Tehtävä vastaanotettu (mallitieto)'},
+      {id:makeId('L'),at:timeOffset(12),target:units[1].call,text:`Yksikkö liitetty tehtävään ${incidents[2].id}`}
+    ],
+    features:[],
+    selected:{kind:'incident',id:incidents[0].id},
+    agencyFilter:'all', showClosed:false, freeOnly:false, search:'', logSearch:'',
+    detailTab:'general',mainTab:'situation',
+    mapSettings:{base:'topo',hillshade:false,contours:true,depthAreas:false,depthLines:false,depthPoints:false,seamarks:false,annotations:true,opacity:75,showTasks:true,showUnits:true},
+    mapCenter:center,mapZoom:11
+  };
+};
+function safeLoad(){
+  try {
+    const raw = JSON.parse(localStorage.getItem(STORAGE));
+    if(!raw || !Array.isArray(raw.units) || !Array.isArray(raw.incidents) || !Array.isArray(raw.events)) return defaults();
+    return {...defaults(),...raw,mapSettings:{...defaults().mapSettings,...(raw.mapSettings||{})}};
+  } catch {return defaults();}
 }
-let S;
-try{const raw=JSON.parse(localStorage.getItem(STORAGE_KEY));S=raw&&Array.isArray(raw.incidents)&&Array.isArray(raw.units)&&Array.isArray(raw.logs)?{...initialState(),...raw}:initialState()}catch{S=initialState()}
-let map=null,incidentMarkers=new Map(),unitMarkers=new Map(),pointMode=false,pendingPoint=null,activeModal=null,toastTimeout=null;
-const persist=()=>{try{localStorage.setItem(STORAGE_KEY,JSON.stringify(S))}catch{toast('Selaimen tallennustila ei ole käytettävissä.')}};
-function log(target,message){S.logs.unshift({id:id(),time:new Date().toISOString(),target,message});if(S.logs.length>700)S.logs.length=700;}
-function toast(message){const el=$('#toast');el.textContent=message;el.classList.add('shown');$('#statusMessage').textContent=message;clearTimeout(toastTimeout);toastTimeout=setTimeout(()=>el.classList.remove('shown'),3600)}
-function getIncident(incidentId){return S.incidents.find(x=>x.id===incidentId)}
-function getUnit(unitId){return S.units.find(x=>x.id===unitId)}
-function currentIncident(){return S.selected?.type==='incident'?getIncident(S.selected.id):null}
-function currentUnit(){return S.selected?.type==='unit'?getUnit(S.selected.id):null}
-function unitTask(u){return S.incidents.find(x=>x.units.includes(u.id)&&x.status!=='paattynyt')}
-function select(type,ident,{zoom=false}={}){S.selected={type,id:ident};S.detailTab='info';persist();render();if(zoom)zoomToSelected()}
-function statusSpan(key){return `<span class="status-label st-${esc(key)}">${esc(ST[key]||key)}</span>`}
-function matchesSearch(values){if(!S.search)return true;return values.some(v=>String(v||'').toLowerCase().includes(S.search.toLowerCase()))}
-function renderIncidents(){
- const items=S.incidents.filter(x=>(S.showClosed||x.status!=='paattynyt')&&(S.agencyFilter==='all'||x.agency===S.agencyFilter)&&matchesSearch([x.id,x.title,x.code,x.address,AGENCIES[x.agency],x.priority]));
- items.sort((a,b)=>Date.parse(b.time)-Date.parse(a.time));$('#incidentCount').textContent=S.incidents.filter(x=>x.status!=='paattynyt').length;
- $('#filteredIncidents').textContent=`${items.length} näkyvissä`;
- $('#incidentsTbody').innerHTML=items.map(x=>`<tr tabindex="0" data-incident="${esc(x.id)}" class="${S.selected?.type==='incident'&&S.selected.id===x.id?'selected':''} ${x.status==='paattynyt'?'muted':''}" title="${esc(x.id)} – ${esc(x.title)}"><td class="time">${shortTime(x.time)}</td><td class="code">${esc(x.code)}</td><td><div class="event-title">${esc(x.title)} ${x.status==='paattynyt'?'✓':''}</div><span class="event-place">${esc(x.address)}</span></td><td><span class="pill p-${x.priority.toLowerCase()}">${esc(x.priority)}</span></td></tr>`).join('')||'<tr><td colspan="4" style="padding:14px;color:#80919a">Ei haun mukaisia tehtäviä.</td></tr>';
- $$('#agencyFilters .chip').forEach(b=>b.classList.toggle('selected',b.dataset.agency===S.agencyFilter));$('#closedToggleLabel').textContent=S.showClosed?'Myös päättyneet':'Aktiiviset';
+let S = safeLoad();
+let map, baseLayers={}, overlayLayers={}, selectedBase, markers={units:null,incidents:null,features:null};
+let modalKind=null, editId=null, pointerMode=null, measurePoints=[], measureObjects=[];
+let toastTimer=null, latestPointer=null;
+function persist() {
+  if(map){const c=map.getCenter();S.mapCenter=[c.lat,c.lng];S.mapZoom=map.getZoom();}
+  try {localStorage.setItem(STORAGE,JSON.stringify(S));}
+  catch {notify('Tallennus ei onnistunut. Tarkista selaimen tallennustilan asetukset.');}
 }
-function renderUnits(){
- const items=S.units.filter(u=>(!S.freeOnly||u.status==='vapaa')&&matchesSearch([u.id,u.type,ST[u.status],AGENCIES[u.agency],unitTask(u)?.id]));
- items.sort((a,b)=>a.id.localeCompare(b.id,'fi'));
- $('#unitCount').textContent=S.units.length;
- $('#unitsTbody').innerHTML=items.map(u=>`<tr data-unit="${esc(u.id)}" tabindex="0" class="${S.selected?.type==='unit'&&S.selected.id===u.id?'selected':''}"><td class="unit-code">${esc(u.id)}</td><td>${esc(u.agency==='pelastus'?'PEL':u.agency==='ensihoito'?'ENS':'POL')}</td><td>${statusSpan(u.status)}</td><td class="mono">${esc(unitTask(u)?.id||'—')}</td></tr>`).join('')||'<tr><td colspan="4" style="padding:14px;color:#80919a">Ei yksiköitä.</td></tr>';
- $('#unitsFooter').textContent=`${S.units.filter(u=>u.status==='vapaa').length} vapaana / ${S.units.length} kaikkiaan`;
- $('#freeOnlyText').textContent=S.freeOnly?'Vain vapaat':'Kaikki tilat';
+function notify(message) {
+  $('#systemStatus').textContent=message;
+  const target=$('#toast');target.textContent=message;target.classList.add('show');
+  clearTimeout(toastTimer);toastTimer=setTimeout(()=>target.classList.remove('show'),3100);
 }
-function row(key,value){return `<tr><td>${esc(key)}</td><td>${value}</td></tr>`}
-function renderDetails(){
- const i=currentIncident(),u=currentUnit();
- $('#detailHeading').textContent=i?'TEHTÄVÄTIEDOT':u?'YKSIKKÖTIEDOT':'TIEDOT';
- $('#detailId').textContent=i?.id||u?.id||'Ei valintaa';
- $$('.detail-tab').forEach(b=>b.classList.toggle('selected',b.dataset.tab===S.detailTab));
- if(!i&&!u){$('#detailBody').innerHTML='<div class="empty-detail"><div class="empty-icon">▤</div><strong>Ei valittua kohdetta</strong><span>Valitse tehtävä tai yksikkö vasemmalta luettelosta tai kartalta.</span></div>';return}
- if(i){renderIncidentDetails(i)}else{renderUnitDetails(u)}
+function record(target,text) {
+  S.events.unshift({id:makeId('L'),at:new Date().toISOString(),target,text});
+  S.events=S.events.slice(0,1500);
 }
-function renderIncidentDetails(i){
- if(S.detailTab==='history'){
-   const history=S.logs.filter(l=>l.target===i.id||i.units.includes(l.target));
-   $('#detailBody').innerHTML=`<div class="section-label">TEHTÄVÄN TAPAHTUMAT (${history.length})</div>${history.length?history.map(l=>`<div class="history-record"><time>${esc(dateTime(l.time))} · ${esc(l.target)}</time>${esc(l.message)}</div>`).join(''):'<p>Ei merkintöjä.</p>'}<button class="action" data-act="newNote">＋ Lisää tapahtumamerkintä</button>`;
-   return;
- }
- if(S.detailTab==='resources'){
-  const assigned=i.units.map(x=>getUnit(x)).filter(Boolean);
-  const available=S.units.filter(u=>!i.units.includes(u.id)&&(!unitTask(u)||unitTask(u)?.id===i.id));
-  $('#detailBody').innerHTML=`<div class="section-label">TEHTÄVÄLLE LIITETYT YKSIKÖT (${assigned.length})</div>${assigned.map(u=>`<div class="assigned-unit"><div class="label"><b>${esc(u.id)}</b><small>${esc(u.type)} · ${esc(ST[u.status]||u.status)}</small></div><button class="tiny-action red" data-act="releaseUnit" data-id="${esc(u.id)}">Vapauta</button><button class="tiny-action" data-act="openUnit" data-id="${esc(u.id)}">Avaa</button></div>`).join('')||'<p style="color:#728493">Ei liitettyjä yksiköitä.</p>'}<div class="section-label">LIITÄ YKSIKKÖ</div><div class="assign-row"><select id="assignUnitSelect" class="formcontrol">${available.map(u=>`<option value="${esc(u.id)}">${esc(u.id)} · ${esc(ST[u.status])}</option>`).join('')}</select><button class="action primary" data-act="assignUnit" ${!available.length||i.status==='paattynyt'?'disabled':''}>Liitä</button></div><div class="form-hint">Yksikön liittäminen ja vapauttaminen vaikuttaa vain tämän selaimen mallidataan.</div>`;
-  return;
- }
- $('#detailBody').innerHTML=`
-  <div class="section-label">PERUSTIEDOT</div><table class="field-table">
-   ${row('Tehtävätunnus',`<span class="mono">${esc(i.id)}</span>`)}
-   ${row('Tehtäväkoodi',`<span class="mono">${esc(i.code)}</span>`)}
-   ${row('Tehtävä',esc(i.title))}
-   ${row('Kiireellisyys',`<span class="pill p-${i.priority.toLowerCase()}">${esc(i.priority)}</span>`)}
-   ${row('Toimiala',esc(AGENCIES[i.agency]||i.agency))}
-   ${row('Tila',i.status==='paattynyt'?'Päättynyt':'Aktiivinen')}
-   ${row('Ilmoitusaika',esc(dateTime(i.time)))}
-   ${row('Lähde',esc(i.source||'Paikallinen syöttö'))}
-  </table>
-  <div class="section-label">SIJAINTI</div><table class="field-table">${row('Kohdeosoite',esc(i.address))}${row('Koordinaatit',`<span class="mono">${Number(i.lat).toFixed(5)}, ${Number(i.lng).toFixed(5)}</span>`)}</table>
-  <div class="section-label">TEHTÄVÄKUVAUS</div><div class="detail-comment">${esc(i.description||'Ei kirjauksia.')}</div>
-  <div class="section-label">TOIMINNOT</div><div class="detail-actions"><button class="action" data-act="editIncident">Muokkaa tietoja</button><button class="action" data-act="focusIncident">Näytä kartalla</button><button class="action" data-act="newNote">Kirjaa tapahtuma</button><button class="action ${i.status==='paattynyt'?'green':'danger'}" data-act="toggleIncident">${i.status==='paattynyt'?'Avaa uudelleen':'Päätä tehtävä'}</button></div>
-  <div class="section-label">RESURSSIT</div><div>${i.units.length?i.units.map(x=>`<span class="status-label">${esc(x)}</span>`).join(' '):'Ei liitettyjä yksiköitä'}</div>
-  <div class="app-warning">Tämä ei ole oikean KEJO-järjestelmän näkymä eikä käytä viranomaisten tehtävä- tai henkilötietoja.</div>`;
+function commit(message) {persist();render();if(message)notify(message);}
+function getIncident(id) {return S.incidents.find(i=>i.id===id);}
+function getUnit(id) {return S.units.find(u=>u.id===id);}
+function selectedIncident() {return S.selected?.kind==='incident' ? getIncident(S.selected.id):null;}
+function selectedUnit() {return S.selected?.kind==='unit' ? getUnit(S.selected.id):null;}
+function taskForUnit(u) {return u.taskId ? getIncident(u.taskId):null;}
+function matchSearch(...fields) {return !S.search || fields.some(s=>String(s??'').toLocaleLowerCase('fi').includes(S.search.toLocaleLowerCase('fi')));}
+function agencyShort(a) {return ({pelastus:'PEL',ensihoito:'ENS',poliisi:'POL'})[a] || '—';}
+function showStatus(st) {return `<span class="status-badge ${esc(st)}">${esc(statuses[st] || st)}</span>`;}
+function isSelected(kind,id) {return S.selected?.kind===kind && S.selected.id===id;}
+function selectEntity(kind,id,zoom=false) {
+  S.selected={kind,id};S.detailTab='general';commit();
+  if(zoom)focusSelected();
 }
-function renderUnitDetails(u){
- const task=unitTask(u);
- if(S.detailTab==='history'){const history=S.logs.filter(l=>l.target===u.id);$('#detailBody').innerHTML=`<div class="section-label">YKSIKÖN TAPAHTUMAT (${history.length})</div>${history.map(l=>`<div class="history-record"><time>${esc(dateTime(l.time))}</time>${esc(l.message)}</div>`).join('')||'<p>Ei tapahtumia.</p>'}`;return}
- if(S.detailTab==='resources'){$('#detailBody').innerHTML=`<div class="section-label">YKSIKÖN TEHTÄVÄ</div>${task?`<table class="field-table">${row('Tunnus',esc(task.id))}${row('Tehtävä',esc(task.title))}${row('Kohde',esc(task.address))}</table><p><button class="action" data-act="goToTask" data-id="${esc(task.id)}">Avaa tehtävä</button></p>`:'<p>Yksiköllä ei ole aktiivista tehtävää.</p>'}`;return}
- $('#detailBody').innerHTML=`<div class="section-label">YKSIKÖN TIEDOT</div><table class="field-table">${row('Tunnus',`<span class="mono">${esc(u.id)}</span>`)}${row('Toimiala',esc(AGENCIES[u.agency]||u.agency))}${row('Tyyppi',esc(u.type))}${row('Tila',statusSpan(u.status))}${row('Aktiivinen tehtävä',task?`<span class="mono">${esc(task.id)}</span>`:'Ei tehtävää')}${row('Sijainti',`<span class="mono">${Number(u.lat).toFixed(5)}, ${Number(u.lng).toFixed(5)}</span>`)}</table>
-  <div class="section-label">VAIHDA YKSIKÖN TILAA</div><select class="formcontrol" id="unitStatusSelect">${Object.entries(ST).map(([k,v])=>`<option value="${k}" ${u.status===k?'selected':''}>${esc(v)}</option>`).join('')}</select>
-  <div class="detail-actions"><button class="action primary" data-act="saveUnitStatus">Tallenna tila</button><button class="action" data-act="focusUnit">Näytä kartalla</button><button class="action" data-act="editUnit">Muokkaa yksikköä</button><button class="action danger" data-act="deleteUnit">Poista yksikkö</button></div>
-  ${task?`<div class="section-label">TEHTÄVÄSIDONTA</div><div class="assigned-unit"><div class="label"><b>${esc(task.id)}</b><small>${esc(task.title)}</small></div><button class="tiny-action" data-act="goToTask" data-id="${esc(task.id)}">Avaa</button></div>`:''}`;
+function listIncidents() {
+  return S.incidents.filter(i=>
+    (S.showClosed || i.status!=='closed') && (S.agencyFilter==='all' || i.agency===S.agencyFilter) &&
+    matchSearch(i.id,i.code,i.title,i.address,i.priority,i.agency)
+  ).sort((a,b)=>Date.parse(b.createdAt)-Date.parse(a.createdAt));
 }
-function renderLog(){const q=(S.logSearch||'').toLowerCase();const items=S.logs.filter(l=>[l.target,l.message,dateTime(l.time)].some(x=>String(x).toLowerCase().includes(q)));
- $('#logCount').textContent=S.logs.length;
- $('#logTbody').innerHTML=items.slice(0,300).map(l=>`<tr><td class="time">${esc(time(l.time))}</td><td class="mono">${esc(l.target)}</td><td>${esc(l.message)}</td></tr>`).join('')||'<tr><td colspan="3">Ei kirjauksia.</td></tr>'}
-function renderMapMarkers(){if(!map||!window.L)return;
- incidentMarkers.forEach(m=>map.removeLayer(m));unitMarkers.forEach(m=>map.removeLayer(m));incidentMarkers.clear();unitMarkers.clear();
- if(S.map.tasks){S.incidents.filter(i=>i.status!=='paattynyt'&&validCoord(i.lat,i.lng)).forEach(i=>{
-  const chosen=S.selected?.type==='incident'&&S.selected.id===i.id;
-  const marker=L.marker([Number(i.lat),Number(i.lng)],{icon:L.divIcon({html:`<div class="incident-marker ${esc(i.agency)} ${chosen?'active':''}"></div>`,className:'',iconSize:[19,19],iconAnchor:[10,10]})});
-  marker.addTo(map).bindTooltip(`${esc(i.code)} ${esc(i.title)} · ${esc(i.id)}`,{direction:'top',offset:[0,-8]});marker.on('click',()=>select('incident',i.id));incidentMarkers.set(i.id,marker);
- })}
- if(S.map.units){S.units.filter(u=>validCoord(u.lat,u.lng)).forEach(u=>{
-  const chosen=S.selected?.type==='unit'&&S.selected.id===u.id;
-  const marker=L.marker([Number(u.lat),Number(u.lng)],{icon:L.divIcon({html:`<div class="map-marker ${esc(u.agency)} ${chosen?'active':''}">${esc(u.id)}</div>`,className:'',iconSize:[70,27],iconAnchor:[35,15]})});
-  marker.addTo(map).bindTooltip(`${esc(u.id)} / ${esc(ST[u.status]||u.status)}`,{direction:'top',offset:[0,-12]});marker.on('click',()=>select('unit',u.id));unitMarkers.set(u.id,marker);
- })}
- $('#mapZoom').textContent=`Kartta · zoom ${map.getZoom()}`;
+function listUnits() {
+  return S.units.filter(u=>(!S.freeOnly || u.status==='free') &&
+    (S.agencyFilter==='all' || u.agency===S.agencyFilter) &&
+    matchSearch(u.call,u.station,u.type,u.status,u.crew,u.taskId,...(u.caps||[]))
+  ).sort((a,b)=>a.call.localeCompare(b.call,'fi',{numeric:true}));
 }
-function render(){renderIncidents();renderUnits();renderDetails();renderLog();renderMapMarkers();$('#globalSearch').value=S.search;$('#logSearch').value=S.logSearch;$$('.menu').forEach(b=>b.classList.toggle('active',b.dataset.view===S.view));$('#toggleUnits').classList.toggle('on',S.map.units);$('#toggleUnits').setAttribute('aria-pressed',String(S.map.units));$('#toggleTasks').classList.toggle('on',S.map.tasks);$('#toggleTasks').setAttribute('aria-pressed',String(S.map.tasks))}
-function zoomToSelected(){if(!map)return;const x=currentIncident()||currentUnit();if(!x||!validCoord(x.lat,x.lng)){toast('Ei näytettävää sijaintia.');return}map.setView([Number(x.lat),Number(x.lng)],15)}
-function fitToAll(){if(!map||!window.L)return;const pts=[...S.units,...S.incidents.filter(x=>x.status!=='paattynyt')].filter(x=>validCoord(x.lat,x.lng)).map(x=>[Number(x.lat),Number(x.lng)]);if(pts.length)map.fitBounds(L.latLngBounds(pts).pad(.23),{maxZoom:14})}
-function initMap(){
- if(!window.L){$('#mapFallback').hidden=false;toast('Karttakirjasto ei latautunut. Tarvitset karttaa varten internetin.');return}
- try{
-  map=L.map('map',{zoomControl:false,attributionControl:false,preferCanvas:true}).setView([62.6078,29.7560],12);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,minZoom:5,attribution:'© OpenStreetMap contributors'}).addTo(map);
-  L.control.zoom({position:'bottomright'}).addTo(map);
-  map.on('mousemove',e=>$('#mapCoordinates').textContent=`WGS84  ${e.latlng.lat.toFixed(5)}° N  ${e.latlng.lng.toFixed(5)}° E`);
-  map.on('zoomend',()=>$('#mapZoom').textContent=`Kartta · zoom ${map.getZoom()}`);
-  map.on('click',e=>{if(pointMode){pendingPoint={lat:e.latlng.lat,lng:e.latlng.lng};endPointMode();openIncidentForm(null,pendingPoint)}});
-  renderMapMarkers();setTimeout(()=>map?.invalidateSize(),150);
- }catch(e){console.error(e);$('#mapFallback').hidden=false;toast('Kartta ei ole käytettävissä.')}
+function renderCounts() {
+  const active=S.incidents.filter(i=>i.status==='active').length;
+  const free=S.units.filter(u=>u.status==='free').length;
+  $('#summaryCounts').innerHTML=`Aktiiviset <b>${active}</b> · Resurssit <b>${S.units.length}</b> · Vapaana <b>${free}</b>`;
+  $('#incidentBadge').textContent=active;
+  $('#unitBadge').textContent=S.units.length;
+  $('#logBadge').textContent=S.events.length;
+  $('#incidentFooter').textContent=`${listIncidents().length} näytetään · ${active} aktiivista · valitse tehtävä avataksesi tiedot`;
+  $('#unitFooter').textContent=`${free} vapaana / ${S.units.length} yksikköä · paikallisesti muokattavat tiedot`;
 }
-function endPointMode(){pointMode=false;$('#mapGuide').hidden=true;$('#choosePoint').classList.remove('on');if(map)map.getContainer().style.cursor=''}
-function fieldsForIncident(i=null,coords=null){return `
- <div class="form-two"><div class="form-field"><label for="fieldAgency">Toimiala *</label><select class="formcontrol" id="fieldAgency" name="agency" required>${Object.entries(AGENCIES).map(([k,v])=>`<option value="${k}" ${i?.agency===k?'selected':''}>${esc(v)}</option>`).join('')}</select></div><div class="form-field"><label for="fieldPriority">Kiireellisyys *</label><select class="formcontrol" id="fieldPriority" name="priority" required>${['A','B','C','D'].map(x=>`<option ${i?.priority===x?'selected':''}>${x}</option>`).join('')}</select></div></div>
- <div class="form-two"><div class="form-field"><label for="fieldCode">Tehtäväkoodi *</label><input class="formcontrol" id="fieldCode" name="code" maxlength="12" value="${esc(i?.code||'') }" placeholder="Esim. 402" required /></div><div class="form-field"><label for="fieldTitle">Tehtävän nimi *</label><input class="formcontrol" id="fieldTitle" name="title" maxlength="65" value="${esc(i?.title||'')}" placeholder="Esim. Rakennuspalo" required /></div></div>
- <div class="form-field"><label for="fieldAddress">Kohdeosoite / paikka *</label><input class="formcontrol" id="fieldAddress" name="address" maxlength="140" value="${esc(i?.address||'')}" placeholder="Katu, kunta" required /></div>
- <div class="form-two"><div class="form-field"><label for="fieldLat">Leveysaste (WGS84) *</label><input class="formcontrol" type="number" id="fieldLat" name="lat" step="any" min="-90" max="90" value="${esc(i?.lat??coords?.lat??62.6034)}" required /></div><div class="form-field"><label for="fieldLng">Pituusaste (WGS84) *</label><input class="formcontrol" type="number" id="fieldLng" name="lng" step="any" min="-180" max="180" value="${esc(i?.lng??coords?.lng??29.7621)}" required /></div></div>
- <div class="form-field"><label for="fieldDescription">Tehtävän kuvaus</label><textarea class="formcontrol" name="description" id="fieldDescription" maxlength="1500" rows="4" placeholder="Vain keksittyä tietoa...">${esc(i?.description||'')}</textarea></div>
- <div class="form-hint">Tallenna vain kuvitteellisia tietoja. Tämä sovellus ei välitä hälytyksiä.</div>`}
-function fieldsForUnit(u=null){return `<div class="form-two"><div class="form-field"><label>Yksikön tunnus *</label><input class="formcontrol" name="id" maxlength="18" value="${esc(u?.id||'')}" ${u?'readonly':''} required placeholder="RPK131" /></div><div class="form-field"><label>Toimiala *</label><select class="formcontrol" name="agency" required>${Object.entries(AGENCIES).map(([k,v])=>`<option value="${k}" ${u?.agency===k?'selected':''}>${esc(v)}</option>`).join('')}</select></div></div>
- <div class="form-field"><label>Yksikön tyyppi *</label><input class="formcontrol" name="type" maxlength="65" value="${esc(u?.type||'')}" placeholder="Pelastusyksikkö / Ensihoitoyksikkö / Poliisipartio" required /></div>
- <div class="form-two"><div class="form-field"><label>Leveysaste (WGS84) *</label><input class="formcontrol" type="number" name="lat" min="-90" max="90" step="any" value="${esc(u?.lat??62.6024)}" required /></div><div class="form-field"><label>Pituusaste (WGS84) *</label><input class="formcontrol" type="number" name="lng" min="-180" max="180" step="any" value="${esc(u?.lng??29.7595)}" required /></div></div>`}
-function openModal(title,html,onSave,submitText='Tallenna'){
- activeModal=onSave;$('#modalTitle').textContent=title;$('#modalFields').innerHTML=html;$('#modalSubmit').textContent=submitText;$('#modalBackdrop').hidden=false;
- const first=$('#modalFields input:not([readonly]),#modalFields select,#modalFields textarea');first?.focus();
+function renderIncidents() {
+  $('#incidentRows').innerHTML=listIncidents().map(i=>`
+    <tr tabindex="0" class="${isSelected('incident',i.id)?'selected':''} ${i.status==='closed'?'closed':''}" data-select-incident="${esc(i.id)}" title="${esc(i.id)} – ${esc(i.address)}">
+      <td class="code-text">${formatClock(i.createdAt)}</td>
+      <td><span class="priority ${esc(i.priority)}">${esc(i.priority)}</span></td>
+      <td class="code-text">${esc(i.code)}</td>
+      <td><div class="primary-line">${esc(i.title)}</div><div class="sub-line">${esc(i.address)}</div></td>
+      <td>${i.status==='closed'?'Päät.':'Aktiiv.'}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="5">Ei tehtäviä valituilla suodattimilla.</td></tr>';
+  $('#showClosedBtn').textContent=S.showClosed?'Myös päättyneet':'Aktiiviset';
+  $$('#agencyFilters .filter').forEach(b=>b.classList.toggle('active',b.dataset.agency===S.agencyFilter));
 }
-function closeModal(){activeModal=null;$('#modalBackdrop').hidden=true;$('#modalFields').innerHTML=''}
-function openIncidentForm(existing=null,coords=null){openModal(existing?'Muokkaa tehtävää':'Uusi tehtävä',fieldsForIncident(existing,coords),data=>{
-  if(!validCoord(data.lat,data.lng)){toast('Virheelliset koordinaatit.');return false}
-  const record={agency:data.agency,priority:data.priority,code:data.code.trim(),title:data.title.trim(),address:data.address.trim(),lat:Number(data.lat),lng:Number(data.lng),description:data.description.trim()};
-  if(!AGENCIES[record.agency]||!['A','B','C','D'].includes(record.priority)||!record.code||!record.title||!record.address)return false;
-  if(existing){Object.assign(existing,record);log(existing.id,`Tehtävän tietoja muokattu`);select('incident',existing.id)}
-  else{const task={id:`T-${String(Date.now()).slice(-9)}`,time:new Date().toISOString(),source:'Paikallinen syöttö',status:'avoin',units:[],...record};S.incidents.unshift(task);log(task.id,`Tehtävä luotu: ${task.code} ${task.title}`);select('incident',task.id);if(map)map.setView([task.lat,task.lng],14)}
-  toast(existing?'Tehtävätiedot päivitetty.':'Tehtävä luotu paikallisesti.');return true;
- },existing?'Tallenna muutokset':'Luo tehtävä')}
-function openUnitForm(existing=null){openModal(existing?'Muokkaa yksikköä':'Lisää yksikkö',fieldsForUnit(existing),data=>{
-  const code=data.id.trim().toUpperCase();if(!code||!AGENCIES[data.agency]||!validCoord(data.lat,data.lng)||!data.type.trim())return false;
-  if(existing){Object.assign(existing,{agency:data.agency,type:data.type.trim(),lat:Number(data.lat),lng:Number(data.lng)});log(existing.id,'Yksikön tietoja päivitetty');select('unit',existing.id)}
-  else{if(getUnit(code)){toast('Tämä yksikkötunnus on jo käytössä.');return false}S.units.push({id:code,agency:data.agency,type:data.type.trim(),lat:Number(data.lat),lng:Number(data.lng),status:'vapaa'});log(code,'Yksikkö lisätty paikallisesti');select('unit',code)}
-  toast('Yksikön tiedot tallennettu.');return true;
- })}
-function openNoteForm(i){openModal(`Tapahtumamerkintä · ${i.id}`,`<div class="form-field"><label for="noteField">Merkintä *</label><textarea class="formcontrol" name="note" id="noteField" rows="5" maxlength="800" placeholder="Tapahtuman kuvaus (kuvitteellinen)..." required></textarea></div>`,data=>{if(!data.note.trim())return false;log(i.id,data.note.trim());render();toast('Merkintä tallennettu lokiin.');return true},'Lisää merkintä')}
-function assignUnit(incident,unitId){const unit=getUnit(unitId);if(!unit||incident.units.includes(unitId)||incident.status==='paattynyt')return;
- const current=unitTask(unit);if(current&&current.id!==incident.id){toast(`Yksikkö ${unitId} on jo tehtävällä ${current.id}.`);return}
- incident.units.push(unitId);unit.status='halytys';log(incident.id,`Yksikkö ${unitId} liitetty tehtävään`);log(unitId,`Hälytetty tehtävälle ${incident.id}`);persist();render();toast(`Yksikkö ${unitId} liitetty tehtävään.`)}
-function releaseUnit(incident,unitId){incident.units=incident.units.filter(v=>v!==unitId);const u=getUnit(unitId);if(u)u.status='vapaa';log(incident.id,`Yksikkö ${unitId} vapautettu`);log(unitId,`Vapautettu tehtävältä ${incident.id}`);persist();render();toast(`${unitId} vapautettu.`)}
-function toggleIncident(i){if(i.status==='avoin'){
-   if(!confirm(`Päätetäänkö tehtävä ${i.id}? Kaikki siihen liitetyt yksiköt vapautetaan.`))return;
-   i.status='paattynyt';for(const code of [...i.units]){const u=getUnit(code);if(u)u.status='vapaa';log(code,`Tehtävä ${i.id} päättynyt`)}i.units=[];log(i.id,'Tehtävä päätetty');
- }else{i.status='avoin';log(i.id,'Tehtävä avattu uudelleen')}
- persist();render();toast('Tehtävän tila päivitetty.');}
-function removeUnit(u){if(unitTask(u)){toast('Vapauta yksikkö ensin tehtävältä.');return}if(!confirm(`Poistetaanko yksikkö ${u.id}?`))return;S.units=S.units.filter(x=>x.id!==u.id);log(u.id,'Yksikkö poistettu');S.selected=null;persist();render();toast('Yksikkö poistettu.')}
-function exportData(){const obj={format:'kejo-local-v2',exported:new Date().toISOString(),incidents:S.incidents,units:S.units,logs:S.logs};const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`kejo-paikalliset-tiedot-${new Date().toISOString().slice(0,10)}.json`;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),5000);toast('JSON-tiedosto viety.')}
-function importData(file){if(!file)return;const reader=new FileReader();reader.onload=()=>{
- try{const data=JSON.parse(reader.result);if(!Array.isArray(data.incidents)||!Array.isArray(data.units)||!Array.isArray(data.logs)||data.incidents.length>3000||data.units.length>3000||data.logs.length>10000)throw Error('Väärä tiedostomuoto.');
-  const cleanText=(t,max)=>String(t??'').slice(0,max);
-  const units=data.units.map(x=>({id:cleanText(x.id,18),agency:AGENCIES[x.agency]?x.agency:'pelastus',type:cleanText(x.type,65),status:ST[x.status]?x.status:'vapaa',lat:Number(x.lat),lng:Number(x.lng)})).filter(x=>x.id&&validCoord(x.lat,x.lng));
-  const ids=new Set(units.map(x=>x.id));
-  const incidents=data.incidents.map(x=>({id:cleanText(x.id,30),code:cleanText(x.code,12),title:cleanText(x.title,65),address:cleanText(x.address,140),description:cleanText(x.description,1500),agency:AGENCIES[x.agency]?x.agency:'pelastus',priority:['A','B','C','D'].includes(x.priority)?x.priority:'C',status:x.status==='paattynyt'?'paattynyt':'avoin',time:Number.isFinite(Date.parse(x.time))?x.time:new Date().toISOString(),source:cleanText(x.source,40),lat:Number(x.lat),lng:Number(x.lng),units:Array.isArray(x.units)?x.units.filter(v=>ids.has(v)).slice(0,100):[]})).filter(x=>x.id&&validCoord(x.lat,x.lng));
-  const logs=data.logs.map(x=>({id:cleanText(x.id||id(),30),time:Number.isFinite(Date.parse(x.time))?x.time:new Date().toISOString(),target:cleanText(x.target,50),message:cleanText(x.message,900)}));
-  if(!confirm(`Tuodaanko ${incidents.length} tehtävää ja ${units.length} yksikköä? Nykyiset tiedot korvataan.`))return;
-  Object.assign(S,{incidents,units,logs,selected:null});persist();render();fitToAll();toast('Tiedot tuotu onnistuneesti.');
- }catch(e){toast('JSON-tiedosto ei kelpaa: '+e.message)}finally{$('#importInput').value=''}
- };reader.readAsText(file)}
-function handleDetailAction(button){const act=button.dataset.act;const i=currentIncident(),u=currentUnit(),which=button.dataset.id;
- switch(act){
- case 'editIncident':if(i)openIncidentForm(i);break;
- case 'focusIncident':case 'focusUnit':zoomToSelected();break;
- case 'newNote':if(i)openNoteForm(i);break;
- case 'toggleIncident':if(i)toggleIncident(i);break;
- case 'assignUnit':if(i)assignUnit(i,$('#assignUnitSelect')?.value);break;
- case 'releaseUnit':if(i&&which)releaseUnit(i,which);break;
- case 'openUnit':if(which)select('unit',which);break;
- case 'goToTask':if(which)select('incident',which);break;
- case 'saveUnitStatus':if(u){const status=$('#unitStatusSelect')?.value;if(!ST[status])return;u.status=status;log(u.id,`Yksikön tila: ${ST[status]}`);persist();render();toast(`Tila tallennettu: ${ST[status]}.`)}break;
- case 'editUnit':if(u)openUnitForm(u);break;
- case 'deleteUnit':if(u)removeUnit(u);break;
- }
+function renderUnits() {
+  $('#unitRows').innerHTML=listUnits().map(u=>`
+    <tr tabindex="0" class="${isSelected('unit',u.id)?'selected':''}" data-select-unit="${esc(u.id)}" title="${esc(u.station)} — ${esc(u.type)}">
+      <td class="unit-ind">${esc(u.call)}</td>
+      <td><div class="primary-line">${esc(u.type)}</div><div class="sub-line">${esc(u.station)} · ${agencyShort(u.agency)}</div></td>
+      <td>${showStatus(u.status)}</td>
+      <td class="code-text">${esc((taskForUnit(u)?.code) || '—')}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="4">Ei yksiköitä valituilla suodattimilla.</td></tr>';
+  $('#freeOnlyBtn').textContent=S.freeOnly?'Vain vapaat':'Kaikki';
 }
-function focusView(v){S.view=v;$$('.menu').forEach(b=>b.classList.toggle('active',b.dataset.view===v));if(v==='tilannekuva'){map?.invalidateSize();fitToAll()}else if(v==='tehtavat'){$('#incidentsPane').scrollIntoView({block:'nearest'});$('#incidentsTbody tr')?.focus()}else if(v==='yksikot'){$('#unitsPane').scrollIntoView({block:'nearest'});$('#unitsTbody tr')?.focus()}else if(v==='tapahtumat'){if($('#bottomArea').classList.contains('collapsed'))toggleLog();$('#logSearch').focus()}persist()}
-function toggleLog(){const el=$('#bottomArea');const collapsed=el.classList.toggle('collapsed');$('.workspace').style.gridTemplateRows=collapsed?'49px 36px 43px minmax(0,1fr) 31px 26px':'';$('#toggleLog').textContent=collapsed?'▴':'▾';map?.invalidateSize()}
-function bind(){
- $('#newIncidentBtn').addEventListener('click',()=>openIncidentForm());$('#newUnitBtn').addEventListener('click',()=>openUnitForm());
- $('#zoomToIncident').addEventListener('click',zoomToSelected);$('#zoomToAll').addEventListener('click',fitToAll);
- $('#exportData').addEventListener('click',exportData);$('#importData').addEventListener('click',()=>$('#importInput').click());$('#importInput').addEventListener('change',e=>importData(e.target.files[0]));
- $('#resetData').addEventListener('click',()=>{if(!confirm('Palautetaanko kaikki esimerkkitiedot? Nykyiset paikalliset tiedot korvataan.'))return;S=initialState();persist();render();fitToAll();toast('Esimerkkitiedot palautettu.')});
- $('#openSettings').addEventListener('click',()=>openModal('Tietoa sovelluksesta',`<p><b>KEJO-tyyppinen kenttätilanne · v2.0</b></p><p>Tämä on itsenäisesti tehty, epävirallinen käyttöliittymämalli. Se ei ole kopio todellisen KEJOn nykyisestä käyttöliittymästä.</p><p><b>Yhteydet:</b> ei yhteyttä viranomaisjärjestelmiin. <b>Tallennus:</b> vain paikallinen selaintallennus. <b>Kartta:</b> OpenStreetMap internetyhteydellä.</p><p><b>Pikanäppäimet:</b> F2 = uusi tehtävä, Ctrl+K = haku, Esc = sulje ikkuna/peru karttapiste.</p><div class="app-warning">Älä syötä oikeita potilastietoja, henkilötietoja tai operatiivisia viranomaistietoja.</div>`,()=>true,'Sulje'));
- $$('.menu').forEach(b=>b.addEventListener('click',()=>focusView(b.dataset.view)));
- $('#incidentsTbody').addEventListener('click',e=>{const tr=e.target.closest('tr[data-incident]');if(tr)select('incident',tr.dataset.incident)});
- $('#incidentsTbody').addEventListener('dblclick',e=>{if(e.target.closest('tr[data-incident]'))zoomToSelected()});
- $('#unitsTbody').addEventListener('click',e=>{const tr=e.target.closest('tr[data-unit]');if(tr)select('unit',tr.dataset.unit)});
- $('#unitsTbody').addEventListener('dblclick',e=>{if(e.target.closest('tr[data-unit]'))zoomToSelected()});
- for(const tb of ['#incidentsTbody','#unitsTbody'])$(tb).addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();e.target.click()}});
- $$('#agencyFilters .chip').forEach(b=>b.addEventListener('click',()=>{S.agencyFilter=b.dataset.agency;persist();renderIncidents()}));
- $('#toggleClosed').addEventListener('click',()=>{S.showClosed=!S.showClosed;persist();renderIncidents()});$('#freeOnly').addEventListener('click',()=>{S.freeOnly=!S.freeOnly;persist();renderUnits()});
- $('#globalSearch').addEventListener('input',e=>{S.search=e.target.value;persist();renderIncidents();renderUnits()});
- $('#logSearch').addEventListener('input',e=>{S.logSearch=e.target.value;persist();renderLog()});$('#clearLogSearch').addEventListener('click',()=>{S.logSearch='';$('#logSearch').value='';persist();renderLog()});
- $$('.detail-tab').forEach(b=>b.addEventListener('click',()=>{S.detailTab=b.dataset.tab;persist();renderDetails()}));
- $('#detailBody').addEventListener('click',e=>{const b=e.target.closest('button[data-act]');if(b)handleDetailAction(b)});
- $('#toggleUnits').addEventListener('click',()=>{S.map.units=!S.map.units;persist();render()});$('#toggleTasks').addEventListener('click',()=>{S.map.tasks=!S.map.tasks;persist();render()});
- $('#choosePoint').addEventListener('click',()=>{pointMode=!pointMode;$('#mapGuide').hidden=!pointMode;$('#choosePoint').classList.toggle('on',pointMode);if(!map&&pointMode){endPointMode();toast('Karttaa ei ole käytettävissä. Voit kirjoittaa koordinaatit tehtäväikkunaan.')}});
- $('#toggleLog').addEventListener('click',toggleLog);
- $('#closeModal').addEventListener('click',closeModal);$('#cancelModal').addEventListener('click',closeModal);$('#modalBackdrop').addEventListener('click',e=>{if(e.target.id==='modalBackdrop')closeModal()});
- $('#modalForm').addEventListener('submit',e=>{e.preventDefault();if(!activeModal)return;const data=Object.fromEntries(new FormData(e.target).entries());if(activeModal(data)!==false){persist();render();closeModal()}});
- document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(!$('#modalBackdrop').hidden)closeModal();else endPointMode()}if(e.key==='F2'&&$('#modalBackdrop').hidden){e.preventDefault();openIncidentForm()}if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();$('#globalSearch').focus();$('#globalSearch').select()}});
+function detailsRow(name,value) {return `<div class="data-field"><span>${esc(name)}</span><span>${value}</span></div>`;}
+function infoGroup(label,body){return `<section class="info-group"><div class="group-title">${esc(label)}</div>${body}</section>`;}
+function renderDetails() {
+  const i=selectedIncident(),u=selectedUnit();
+  $('#detailsHeading').textContent=i?'TEHTÄVÄTIEDOT':u?'YKSIKKÖTIEDOT':'TIEDOT';
+  $('#detailsIdentifier').textContent=i?.id||u?.call||'—';
+  $$('.detail-tab').forEach(b=>b.classList.toggle('active',b.dataset.detailTab===S.detailTab));
+  if(i) return renderIncidentDetails(i);
+  if(u) return renderUnitDetails(u);
+  $('#detailsContent').innerHTML='<div class="blank-selection">Valitse tehtävä tai yksikkö luettelosta tai kartalta.</div>';
 }
-function tick(){const now=new Date();$('#clock').textContent=now.toLocaleDateString('fi-FI')+'  '+now.toLocaleTimeString('fi-FI')}
-bind();tick();setInterval(tick,1000);render();initMap();
+function renderIncidentDetails(i) {
+  const assigned=S.units.filter(u=>u.taskId===i.id);
+  if(S.detailTab==='units') {
+    const available=S.units.filter(u=>!u.taskId && u.status!=='unavailable');
+    $('#detailsContent').innerHTML=infoGroup(`LIITETYT YKSIKÖT (${assigned.length})`,
+      assigned.map(u=>`<div class="detail-unit"><div><strong>${esc(u.call)}</strong><small>${esc(u.type)} · ${esc(statuses[u.status])}</small></div><button class="btn tiny" data-action="removeUnit" data-unit="${esc(u.id)}">Irrota</button></div>`).join('')||'<p class="small-muted">Ei liitettyjä yksiköitä.</p>'
+    )+infoGroup('LIITÄ RESURSSI',`
+      <div class="assign-line"><select id="assignUnitSelect" aria-label="Yksikkö">${available.map(u=>`<option value="${esc(u.id)}">${esc(u.call)} · ${esc(u.type)}</option>`).join('')}</select>
+      <button class="btn strong" data-action="assignUnit" ${available.length&&i.status==='active'?'':'disabled'}>Liitä</button></div>
+      <p class="small-muted">Liittäminen muuttaa vain tämän työtilan paikallista tietoa.</p>
+    `);
+    return;
+  }
+  if(S.detailTab==='events') {
+    $('#detailsContent').innerHTML=infoGroup('TEHTÄVÄKOHTAISET KIRJAUKSET',
+      S.events.filter(e=>e.target===i.id).map(e=>`<div class="history-record"><time>${esc(formatDate(e.at))}</time>${esc(e.text)}</div>`).join('')||'<p class="small-muted">Ei kirjauksia.</p>'
+    )+`<button class="btn strong" data-action="addNote">+ Kirjaa tapahtuma</button>`;
+    return;
+  }
+  $('#detailsContent').innerHTML=
+    infoGroup('PERUSTIEDOT',
+      detailsRow('Tehtävätunnus',`<span class="mono">${esc(i.id)}</span>`)+
+      detailsRow('Tehtävä',`${esc(i.code)} · ${esc(i.title)}`)+
+      detailsRow('Kiireellisyys',`<span class="priority ${esc(i.priority)}">${esc(i.priority)}</span>`)+
+      detailsRow('Toimiala',esc(agencies[i.agency]))+
+      detailsRow('Tila',i.status==='active'?'Aktiivinen':'Päättynyt')+
+      detailsRow('Ilmoitettu',esc(formatDate(i.createdAt)))+
+      detailsRow('Johtaja',esc(i.commander||'Ei määritelty'))
+    )+
+    infoGroup('SIJAINTI',
+      detailsRow('Paikka',esc(i.address))+
+      detailsRow('WGS84',`<span class="mono">${Number(i.lat).toFixed(5)}, ${Number(i.lng).toFixed(5)}</span>`)+
+      `<div class="detail-buttons"><button class="btn" data-action="focus">Näytä kartalla</button><button class="btn" data-action="copyCoords">Kopioi koordinaatit</button><button class="btn" data-action="setIncidentPoint">Siirrä kartalla</button></div>`
+    )+
+    infoGroup('TEHTÄVÄKUVAUS',`<div class="info-panel">${esc(i.description||'Ei lisätietoja.')}</div>`)+
+    infoGroup('RESURSSIT',assigned.map(u=>`<div class="detail-unit"><div><strong>${esc(u.call)}</strong><small>${esc(u.type)}</small></div>${showStatus(u.status)}</div>`).join('')||'<p class="small-muted">Ei liitettyjä yksiköitä.</p>')+
+    infoGroup('TOIMINNOT',`<div class="detail-buttons"><button class="btn" data-action="editIncident">Muokkaa tehtävää</button><button class="btn" data-action="addNote">Lisää kirjaus</button><button class="btn ${i.status==='active'?'danger':''}" data-action="toggleIncident">${i.status==='active'?'Päätä tehtävä':'Avaa tehtävä'}</button></div>`);
+}
+function renderUnitDetails(u) {
+  const i=taskForUnit(u);
+  if(S.detailTab==='events') {
+    $('#detailsContent').innerHTML=infoGroup('YKSIKÖN KIRJAUKSET',
+      S.events.filter(e=>e.target===u.call).map(e=>`<div class="history-record"><time>${esc(formatDate(e.at))}</time>${esc(e.text)}</div>`).join('')||'<p class="small-muted">Ei kirjauksia.</p>')+
+      '<button class="btn strong" data-action="addNote">+ Kirjaa tapahtuma</button>';
+    return;
+  }
+  if(S.detailTab==='units') {
+    $('#detailsContent').innerHTML=infoGroup('TILATIEDOT',
+      `<div class="assign-line"><select id="statusSelect" aria-label="Yksikön tila">${Object.entries(statuses).map(([key,label])=>`<option value="${key}" ${key===u.status?'selected':''}>${esc(label)}</option>`).join('')}</select><button class="btn strong" data-action="saveStatus">Päivitä</button></div><p class="small-muted">Tilat ovat paikallisen mallin tiloja, eivät KEJOn virallisia statusviestejä.</p>`
+    )+infoGroup('TEHTÄVÄSIDONTA',i?`<p>${esc(i.code)} · ${esc(i.title)}</p><button class="btn" data-action="openUnitTask">Avaa tehtävä</button> <button class="btn" data-action="releaseSelectedUnit">Irrota</button>`:'<p class="small-muted">Ei tehtävälle sidottu.</p>');
+    return;
+  }
+  $('#detailsContent').innerHTML=
+    infoGroup('YKSIKKÖ',
+      detailsRow('Tunnus',`<span class="mono">${esc(u.call)}</span>`)+
+      detailsRow('Toimiala',esc(agencies[u.agency]))+
+      detailsRow('Yksikkölaji',esc(u.type))+
+      detailsRow('Asemapaikka',esc(u.station))+
+      detailsRow('Miehistö',esc(u.crew||'Ei määritelty'))+
+      detailsRow('Tila',showStatus(u.status))+
+      detailsRow('Tehtävä',esc(i?`${i.code} · ${i.id}`:'—'))
+    )+
+    infoGroup('SUORITUSKYVYT', (u.caps||[]).map(c=>`<span class="status-badge free" style="margin:0 5px 5px 0">${esc(c)}</span>`).join('')||'<p class="small-muted">Ei määritelty.</p>')+
+    infoGroup('SIJAINTI',detailsRow('WGS84',`<span class="mono">${Number(u.lat).toFixed(5)}, ${Number(u.lng).toFixed(5)}</span>`))+
+    infoGroup('TOIMINNOT',`<div class="detail-buttons"><button class="btn" data-action="focus">Näytä kartalla</button><button class="btn" data-action="editUnit">Muokkaa yksikköä</button><button class="btn" data-action="setUnitPoint">Siirrä kartalla</button><button class="btn" data-action="openStatusTab">Vaihda tila</button></div>`);
+}
+function renderEvents() {
+  const q=S.logSearch.toLocaleLowerCase('fi');
+  $('#eventRows').innerHTML=S.events.filter(e=>!q||`${e.text} ${e.target}`.toLocaleLowerCase('fi').includes(q)).map(e=>`
+    <tr><td class="code-text">${esc(formatDate(e.at))}</td><td class="code-text">${esc(e.target)}</td><td>${esc(e.text)}</td></tr>
+  `).join('')||'<tr><td colspan="3">Ei tapahtumia.</td></tr>';
+}
+function renderTabs(){
+  $$('.nav-tab').forEach(btn=>btn.classList.toggle('active',btn.dataset.mainTab===S.mainTab));
+  $('#workspace').className='workspace view-'+S.mainTab;
+  $('#eventPane').classList.toggle('is-expanded',S.mainTab==='log');
+  $('#mapModule').classList.toggle('map-focused',S.mainTab==='map');
+  requestAnimationFrame(()=>map?.invalidateSize());
+}
+function render() {
+  renderCounts();renderIncidents();renderUnits();renderDetails();renderEvents();renderTabs();renderMapMarkers();
+}
+// ----------------------------- Karttapalvelut -------------------------------
+// Pohjakartat: OSM, OpenTopoMap ja Esri. Julkiset palvelut voivat rajoittaa käyttöä.
+// Syke WMS: 1.1.1 / EPSG:3857 / image/png / läpinäkyvä, OGC-karttapalvelu.
+// Syvyysaineisto on osittaista eikä ole tarkoitettu navigointiin tai pelastustoiminnan päätöksiin.
+const topoUrl = 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png';
+const streetUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+const imageryUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+const hillshadeUrl = 'https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}';
+const sykeUrl = 'https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wms';
+const seaUrl = 'https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png';
+let mmlApiKey = '';
+try {mmlApiKey=sessionStorage.getItem('kenttatyoasema_mml_key')||'';}catch{}
+function makeSykeLayer(layerName, name) {
+  return L.tileLayer.wms(sykeUrl, {
+    layers: layerName, format:'image/png', transparent:true,
+    version:'1.1.1', attribution:`Syvyystieto: Suomen ympäristökeskus (Syke) · ${name} · CC BY 4.0`,
+    opacity: S.mapSettings.opacity / 100, maxZoom:19
+  });
+}
+function prepareMap() {
+  if(typeof L==='undefined') { $('#mapWait').hidden=false;notify('Karttakirjastoa ei voitu avata. Tarkista verkkoyhteys.'); return; }
+  try {
+    const c=Array.isArray(S.mapCenter)&&validPos(S.mapCenter[0],S.mapCenter[1]) ? S.mapCenter : center;
+    map=L.map('map',{zoomControl:true,attributionControl:true,preferCanvas:true}).setView(c,S.mapZoom||11);
+    L.control.scale({metric:true,imperial:false,position:'bottomleft'}).addTo(map);
+    baseLayers.street=L.tileLayer(streetUrl,{maxZoom:19,attribution:'© OpenStreetMapin tekijät'});
+    baseLayers.topo=L.tileLayer(topoUrl,{maxZoom:17,maxNativeZoom:17,subdomains:'abc',attribution:'© OpenStreetMapin tekijät, SRTM · karttatyyli © OpenTopoMap (CC BY-SA)'});
+    baseLayers.aerial=L.tileLayer(imageryUrl,{maxZoom:19,attribution:'Tiles © Esri, Maxar, Earthstar Geographics ja muut toimittajat'});
+    let topoErrors=0;
+    baseLayers.topo.on('tileerror',()=>{if(S.mapSettings.base==='topo'&&++topoErrors===4){changeBasemap('street');notify('Maastokarttatiiliä ei saatu palvelimelta. Vaihdettiin osoitekarttaan.');}});
+    if(mmlApiKey)buildMmlLayer();
+    $('#mmlKey').value=mmlApiKey;
+    overlayLayers.hillshade=L.tileLayer(hillshadeUrl,{maxZoom:17,opacity:.42,attribution:'Rinnevarjoste © Esri ja aineistotoimittajat'});
+    overlayLayers.depthAreas=makeSykeLayer('EL.Syvyysalue','Syvyysalue');
+    overlayLayers.depthLines=makeSykeLayer('EL.ContourLine','Syvyyskäyrä');
+    overlayLayers.depthPoints=makeSykeLayer('EL.SpotElevation','Syvyyspiste');
+    overlayLayers.seamarks=L.tileLayer(seaUrl,{maxZoom:18,attribution:'Merimerkit © OpenSeaMapin tekijät'});
+    markers.incidents=L.layerGroup().addTo(map);
+    markers.units=L.layerGroup().addTo(map);
+    markers.features=L.layerGroup().addTo(map);
+    map.on('mousemove', e=>{
+      latestPointer=e.latlng;
+      $('#mapMouseCoord').textContent=`WGS84: ${e.latlng.lat.toFixed(6)} N / ${e.latlng.lng.toFixed(6)} E`;
+    });
+    map.on('click', onMapClick);
+    map.on('dblclick', e=>{if(pointerMode?.type==='measure'){L.DomEvent.stop(e);endMeasure();}});
+    map.on('moveend zoomend',()=>{
+      $('#mapScaleText').textContent=`Zoom ${map.getZoom()} · Keskipiste ${map.getCenter().lat.toFixed(4)}, ${map.getCenter().lng.toFixed(4)}`;
+      persist();
+    });
+    map.on('contextmenu', e=>{
+      if(pointerMode)return;
+      const text=prompt('Lisää oma paikkamerkintä (paikallinen). Nimi:');
+      if(text&&text.trim()){
+        S.features.push({id:makeId('M'),type:'point',name:text.trim().slice(0,140),lat:e.latlng.lat,lng:e.latlng.lng});
+        record('KARTTA',`Paikkamerkintä: ${text.trim().slice(0,70)}`);commit('Paikkamerkintä lisätty.');
+      }
+    });
+    configureLayers();
+    renderMapMarkers();
+  } catch(err) {
+    console.error('Map initialization error',err);
+    $('#mapWait').hidden=false;
+    notify('Karttaa ei voitu alustaa.');
+  }
+}
+function buildMmlLayer(){
+  if(typeof L==='undefined'||!mmlApiKey)return;
+  baseLayers.mml=L.tileLayer('https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts/1.0.0/maastokartta/default/WGS84_Pseudo-Mercator/{z}/{y}/{x}.png?api-key='+encodeURIComponent(mmlApiKey),{maxZoom:18,attribution:'Maastokartta © Maanmittauslaitos, CC BY 4.0'});
+  let errors=0;
+  baseLayers.mml.on('tileerror',()=>{if(S.mapSettings.base==='mml'&&++errors===4){changeBasemap('topo');notify('MML-kartan lataus epäonnistui. Tarkista API-avain ja palvelun saatavuus.');}});
+}
+function configureLayers() {
+  if(!map)return;
+  if(!baseLayers[S.mapSettings.base])S.mapSettings.base='topo';
+  if(selectedBase)map.removeLayer(selectedBase);
+  selectedBase=baseLayers[S.mapSettings.base].addTo(map);
+  Object.entries(overlayLayers).forEach(([name,layer])=>{
+    if(S.mapSettings[name])layer.addTo(map);
+    else if(map.hasLayer(layer))map.removeLayer(layer);
+  });
+  // Pidä viranomaismerkinnät ja omat piirrokset ylimpinä.
+  Object.values(markers).forEach(group=>{
+    if(group&&map.hasLayer(group)){group.remove();group.addTo(map);}
+  });
+  markers.incidents && (S.mapSettings.showTasks?markers.incidents.addTo(map):markers.incidents.remove());
+  markers.units && (S.mapSettings.showUnits?markers.units.addTo(map):markers.units.remove());
+  markers.features && (S.mapSettings.annotations?markers.features.addTo(map):markers.features.remove());
+  $$('.layer-option input[name="basemap"]').forEach(r=>r.checked=r.value===S.mapSettings.base);
+  $$('.layer-option input[data-layer]').forEach(c=>c.checked=!!S.mapSettings[c.dataset.layer]);
+  $('#layerOpacity').value=S.mapSettings.opacity;
+  $('#opacityLabel').textContent=`${S.mapSettings.opacity} %`;
+  $('#toggleTaskMarkers').classList.toggle('active',S.mapSettings.showTasks);
+  $('#toggleUnitMarkers').classList.toggle('active',S.mapSettings.showUnits);
+  $('#activeLayerStatus').textContent=`POHJA: ${({street:'OSM',topo:'TOPO',aerial:'ILMAKUVA',mml:'MML MAASTO'})[S.mapSettings.base]} · LISÄTASOT: ${Object.keys(overlayLayers).filter(k=>S.mapSettings[k]).length}`;
+  persist();
+}
+function updateOpacity(){
+  Object.entries(overlayLayers).forEach(([name,layer])=>{
+    if(typeof layer.setOpacity==='function')layer.setOpacity(name==='hillshade' ? S.mapSettings.opacity/100*.55 : S.mapSettings.opacity/100);
+  });
+  $('#opacityLabel').textContent=`${S.mapSettings.opacity} %`;
+  persist();
+}
+function changeBasemap(name) {
+  if(name==='mml'&&!mmlApiKey){notify('MML:n maastokartta vaatii oman API-avaimen. Syötä se karttatasovalikossa.');$$('.layer-option input[name="basemap"]').forEach(r=>r.checked=r.value===S.mapSettings.base);return;}
+  if(!baseLayers[name])return;
+  S.mapSettings.base=name;
+  S.mapSettings.contours=name==='topo'||name==='mml';
+  configureLayers();
+  notify(name==='topo'?'Maastokartta: korkeuskäyrät, polut ja maastotyypit.':'Pohjakartta vaihdettu.');
+}
+function toggleLayer(name,checked) {
+  if(name==='contours') {
+    if(checked)changeBasemap('topo');
+    else {S.mapSettings.contours=false;changeBasemap('street');}
+    return;
+  }
+  if(!Object.hasOwn(overlayLayers,name) && name!=='annotations')return;
+  S.mapSettings[name]=checked;
+  configureLayers();
+  const info=name.startsWith('depth')?'SYKE-aineisto näkyy vain järvillä, joilta on julkaistu syvyystietoja.':'';
+  if(info)$('#layerNote').textContent=info;
+}
+function renderMapMarkers() {
+  if(!map)return;
+  markers.incidents.clearLayers();markers.units.clearLayers();markers.features.clearLayers();
+  for(const i of S.incidents){
+    if(i.status==='closed'||!validPos(i.lat,i.lng))continue;
+    const icon=L.divIcon({className:'',html:`<div class="map-task ${isSelected('incident',i.id)?'selected':''}" title="${esc(i.code)} ${esc(i.title)}"></div>`,iconSize:[18,18],iconAnchor:[9,9]});
+    const marker=L.marker([+i.lat,+i.lng],{icon}).addTo(markers.incidents);
+    marker.bindPopup(`<strong>${esc(i.code)} · ${esc(i.title)}</strong>${esc(i.address)}<div>Kiireellisyys ${esc(i.priority)}</div><button data-map-select="incident" data-id="${esc(i.id)}">Avaa tehtävä</button>`);
+    // Klikkaus avaa Leaflet-popupin; 'Avaa tehtävä' tekee valinnan.
+  }
+  for(const u of S.units){
+    if(!validPos(u.lat,u.lng))continue;
+    const label=agencyShort(u.agency);
+    const icon=L.divIcon({className:'',html:`<div class="map-symbol ${u.agency==='pelastus'?'rescue':u.agency==='ensihoito'?'medical':'police'} ${isSelected('unit',u.id)?'selected':''}" title="${esc(u.call)}">${esc(label)}</div>`,iconSize:[31,22],iconAnchor:[15,11]});
+    const marker=L.marker([+u.lat,+u.lng],{icon}).addTo(markers.units);
+    marker.bindPopup(`<strong>${esc(u.call)}</strong>${esc(u.type)}<div>${esc(u.station)} · ${esc(statuses[u.status])}</div><div style="font-size:10px;margin-top:6px">Sijainti käsin syötetty mallitieto — ei GPS-paikannus</div><button data-map-select="unit" data-id="${esc(u.id)}">Avaa yksikkö</button>`);
+    // Klikkaus avaa Leaflet-popupin; 'Avaa yksikkö' tekee valinnan.
+  }
+  for(const f of S.features){
+    if(f.type==='point'&&validPos(f.lat,f.lng)){
+      const marker=L.circleMarker([f.lat,f.lng],{radius:6,color:'#273c5b',weight:2,fillColor:'#f0db89',fillOpacity:.9}).addTo(markers.features);
+      marker.bindPopup(`<strong>OMA KOHDE</strong>${esc(f.name)}<div><button data-delete-feature="${esc(f.id)}">Poista</button></div>`);
+    }
+    if(f.type==='line'&&Array.isArray(f.points)&&f.points.length>1){
+      const poly=L.polyline(f.points,{color:'#f5c872',weight:3,dashArray:'6 4'}).addTo(markers.features);
+      poly.bindTooltip(`${Number(f.distance||0).toFixed(0)} m`);
+      L.circleMarker(f.points.at(-1),{radius:4,color:'#f5c872',fillOpacity:1,fillColor:'#f5c872'}).addTo(markers.features);
+    }
+  }
+}
+function focusSelected(){
+  if(!map){notify('Kartta ei ole ladattuna.');return;}
+  const entity=selectedIncident()||selectedUnit();
+  if(entity && validPos(entity.lat,entity.lng))map.setView([+entity.lat,+entity.lng],Math.max(13,map.getZoom()),{animate:true});
+  else notify('Valitulla kohteella ei ole kelvollisia koordinaatteja.');
+}
+function fitAll() {
+  if(!map)return;
+  const coords=[...S.incidents.filter(i=>i.status==='active'),...S.units].filter(e=>validPos(e.lat,e.lng)).map(e=>[+e.lat,+e.lng]);
+  if(coords.length)map.fitBounds(L.latLngBounds(coords).pad(.2),{maxZoom:13});
+  else map.setView(center,11);
+}
+function setPointerMode(mode) {
+  pointerMode=mode;measurePoints=[];measureObjects.forEach(o=>map?.removeLayer(o));measureObjects=[];
+  if(map)map.getContainer().style.cursor=mode?'crosshair':'';
+  const hint=$('#mapModeHint');hint.hidden=!mode;
+  hint.textContent=mode?.type==='measure'?'MITTAUS: napsauta karttaa lisätäksesi pisteitä. Kaksoisnapsautus tai Esc päättää.':
+    mode?.type==='moveUnit'?'SIIRRÄ YKSIKKÖ: valitse uusi sijainti kartalta. Esc peruu.':
+    mode?.type==='moveIncident'?'TEHTÄVÄN SIJAINTI: osoita kartalta uusi paikka. Esc peruu.':
+    'UUSI TEHTÄVÄ: napsauta karttaa asettaaksesi paikan. Esc peruu.';
+  $('#measureButton').classList.toggle('active',mode?.type==='measure');
+  $('#pointButton').classList.toggle('active',mode?.type==='newIncident');
+  if(map) {
+    if(mode?.type==='measure')map.doubleClickZoom.disable();
+    else map.doubleClickZoom.enable();
+  }
+}
+function onMapClick(e) {
+  if(!pointerMode)return;
+  if(pointerMode.type==='measure')return addMeasurePoint(e.latlng);
+  if(pointerMode.type==='newIncident') {
+    setPointerMode(null);
+    return openIncidentModal(null,{lat:e.latlng.lat,lng:e.latlng.lng});
+  }
+  const entity=pointerMode.type==='moveUnit'?getUnit(pointerMode.id):getIncident(pointerMode.id);
+  if(entity){
+    entity.lat=e.latlng.lat;entity.lng=e.latlng.lng;
+    record(pointerMode.type==='moveUnit'?entity.call:entity.id,'Sijaintia muutettu käsin kartalla');
+    setPointerMode(null);commit('Sijainti päivitetty paikallisesti.');
+  }
+}
+function addMeasurePoint(pt) {
+  if(!map)return;
+  measurePoints.push(pt);
+  const dot=L.circleMarker(pt,{radius:4,color:'#fdd17a',fillOpacity:1,fillColor:'#fdd17a'}).addTo(map);
+  measureObjects.push(dot);
+  if(measurePoints.length>1){
+    const last=measurePoints.at(-2);
+    const segment=L.polyline([last,pt],{color:'#ffcb77',weight:3,dashArray:'7 4'}).addTo(map);
+    measureObjects.push(segment);
+  }
+  const length=measurePoints.slice(1).reduce((sum,p,index)=>sum+measurePoints[index].distanceTo(p),0);
+  $('#mapModeHint').textContent=`MITTAUS: ${length>=1000?(length/1000).toFixed(2)+' km':length.toFixed(0)+' m'} · ${measurePoints.length} pistettä · Kaksoisnapsautus tai Esc päättää`;
+}
+function endMeasure() {
+  if(pointerMode?.type!=='measure')return;
+  if(measurePoints.length>=2){
+    const distance=measurePoints.slice(1).reduce((sum,p,index)=>sum+measurePoints[index].distanceTo(p),0);
+    S.features.push({id:makeId('M'),type:'line',points:measurePoints.map(p=>[p.lat,p.lng]),distance});
+    record('KARTTA',`Mitattu matka: ${distance.toFixed(0)} m`);
+    setPointerMode(null);commit(`Mittaviiva tallennettu: ${distance.toFixed(0)} metriä.`);
+  } else {setPointerMode(null);notify('Mittaus peruutettu (vähintään kaksi pistettä).');}
+}
+// ----------------------------- Muokkauslomakkeet -----------------------------
+function f(label,name,value='',type='text',extra='') {
+  return `<div class="form-field"><label for="form_${esc(name)}">${esc(label)}</label><input id="form_${esc(name)}" name="${esc(name)}" type="${type}" value="${esc(value)}" ${extra}></div>`;
+}
+function fieldSelect(label,name,items,selected) {
+  return `<div class="form-field"><label for="form_${esc(name)}">${esc(label)}</label><select id="form_${esc(name)}" name="${esc(name)}">${items.map(([v,text])=>`<option value="${esc(v)}" ${String(v)===String(selected)?'selected':''}>${esc(text)}</option>`).join('')}</select></div>`;
+}
+function openModal(title,kind,content,id=null) {
+  modalKind=kind;editId=id;
+  $('#modalTitle').textContent=title;
+  $('#modalContent').innerHTML=content;
+  $('#modalBackdrop').hidden=false;
+  requestAnimationFrame(()=>$('#modalContent input:not([type="checkbox"]), #modalContent select')?.focus());
+}
+function closeModal(){
+  $('#modalBackdrop').hidden=true;
+  $('#modalContent').innerHTML='';modalKind=null;editId=null;
+}
+function openIncidentModal(i=null,override={}) {
+  const current=i||{agency:S.agencyFilter==='all'?'pelastus':S.agencyFilter,code:'402',title:'Rakennuspalo: keskisuuri',priority:'B',address:'',description:'',commander:'',lat:override.lat??center[0],lng:override.lng??center[1]};
+  openModal(i?'Muokkaa tehtävää':'Uusi paikallinen tehtävä','incident',
+    `<div class="form-note">Harjoitus- ja sovellusmallin tehtävätietoja. Ei yhteyttä hätäkeskukseen.</div>`+
+    fieldSelect('Toimiala','agency',Object.entries(agencies),current.agency)+
+    fieldSelect('Kiireellisyys','priority',['A','B','C','D'].map(x=>[x,`Luokka ${x}`]),current.priority)+
+    `<div class="form-field full"><label for="form_code">Tehtäväkoodi (julkinen lähdelista)</label><input id="form_code" name="code" list="codeOptions" value="${esc(current.code)}" required maxlength="8" autocomplete="off"><datalist id="codeOptions"></datalist><small id="codeHint" class="small-muted">Valitse lähdeluettelon koodi tai kirjoita muu.</small></div>`+
+    f('Tehtävän kuvaus / nimike','title',current.title,'text','required maxlength="150"')+
+    f('Kohteen osoite / paikan nimi','address',current.address,'text','required maxlength="180"')+
+    f('Johtaja / vastuuhenkilö (malli)','commander',current.commander,'text','maxlength="100"')+
+    f('Leveysaste WGS84','lat',current.lat,'number','step="any" required')+
+    f('Pituusaste WGS84','lng',current.lng,'number','step="any" required')+
+    `<div class="form-field full"><label for="form_description">Lisätiedot</label><textarea id="form_description" name="description" rows="4" maxlength="3000">${esc(current.description)}</textarea></div>`, i?.id||null);
+  updateCodeDatalist();
+}
+function updateCodeDatalist() {
+  const a=$('#form_agency')?.value;
+  const hints=DATA.codes.filter(x=>x[2]===a);
+  const datalist=$('#codeOptions');
+  if(!datalist)return;
+  datalist.innerHTML=hints.map(x=>`<option value="${esc(x[0])}">${esc(x[1])}</option>`).join('');
+  updateCodeTitle(false);
+}
+function updateCodeTitle(allowChange=true) {
+  const code=$('#form_code')?.value.trim();
+  const agency=$('#form_agency')?.value;
+  const found=DATA.codes.find(x=>x[0]===code&&x[2]===agency);
+  const hint=$('#codeHint');
+  if(hint)hint.textContent=found?`${found[0]} · ${found[1]}`:'Ei löydy tämän toimialan lähdelistasta – tarkista koodi.';
+  if(found&&allowChange&&$('#form_title'))$('#form_title').value=found[1];
+}
+function openUnitModal(u=null) {
+  const current=u||{call:'',agency:'pelastus',type:'Sammutusyksikkö',station:'',status:'free',crew:'1+3',caps:[],lat:center[0],lng:center[1]};
+  const types=DATA.types[current.agency]||DATA.types.pelastus;
+  openModal(u?'Muokkaa yksikköä':'Uusi paikallinen yksikkö','unit',
+    `<div class="form-note">Tunnus ja kalusto määritetään käsin. Ei oikeita yksiköiden sijainteja tai statustietoja.</div>`+
+    f('Yksikkötunnus','call',current.call,'text','required maxlength="32"')+
+    fieldSelect('Toimiala','agency',Object.entries(agencies),current.agency)+
+    fieldSelect('Kalustotyyppi / tehtävä','type',[...new Set([...types,current.type])].map(x=>[x,x]),current.type)+
+    fieldSelect('Tila','status',Object.entries(statuses),current.status)+
+    f('Asemapaikka','station',current.station,'text','required maxlength="100"')+
+    f('Vahvuus','crew',current.crew,'text','maxlength="20"')+
+    f('Leveysaste WGS84','lat',current.lat,'number','step="any" required')+
+    f('Pituusaste WGS84','lng',current.lng,'number','step="any" required')+
+    `<div class="form-field full"><label>Suorituskyvyt</label><div class="capability-grid" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px">${DATA.capabilityLabels.map(c=>`<label style="display:flex;align-items:center;gap:6px"><input name="caps" type="checkbox" value="${esc(c)}" ${(current.caps||[]).includes(c)?'checked':''}>${esc(c)}</label>`).join('')}</div></div>`,u?.id||null);
+}
+function updateUnitTypes() {
+  const agency=$('#form_agency')?.value;
+  const target=$('#form_type');
+  if(!target||!DATA.types[agency])return;
+  target.innerHTML=DATA.types[agency].map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join('');
+}
+function saveModal() {
+  const form=$('#modalForm');
+  if(!form.reportValidity())return;
+  const values=new FormData(form);
+  const lat=String(values.get('lat')??'').trim(),lng=String(values.get('lng')??'').trim();
+  if(modalKind==='incident') {
+    if(!validPos(lat,lng))return notify('Koordinaatit eivät ole kelvollisia.');
+    const agency=String(values.get('agency'));
+    const code=String(values.get('code')??'').trim();
+    const patch={agency,priority:String(values.get('priority')),code,title:String(values.get('title')).trim(),
+      address:String(values.get('address')).trim(),commander:String(values.get('commander')||'').trim(),
+      description:String(values.get('description')||'').trim(),lat:+lat,lng:+lng};
+    if(!patch.title||!patch.address||!code)return notify('Täytä tehtävän pakolliset tiedot.');
+    let entity=editId?getIncident(editId):null;
+    if(entity){Object.assign(entity,patch);record(entity.id,'Tehtävätietoja muokattu');}
+    else {entity={...patch,id:makeId('T'),createdAt:new Date().toISOString(),status:'active'};S.incidents.unshift(entity);record(entity.id,`Tehtävä vastaanotettu: ${code} ${patch.title}`);}
+    S.selected={kind:'incident',id:entity.id};
+    closeModal();commit('Tehtävätiedot tallennettu.');
+    if(map)map.setView([entity.lat,entity.lng],Math.max(map.getZoom(),13));
+    return;
+  }
+  if(modalKind==='unit') {
+    if(!validPos(lat,lng))return notify('Koordinaatit eivät ole kelvollisia.');
+    const call=String(values.get('call')||'').trim().toUpperCase();
+    if(!call)return notify('Yksikkötunnus puuttuu.');
+    if(S.units.some(u=>u.call.toUpperCase()===call&&u.id!==editId))return notify('Yksikkötunnus on jo käytössä.');
+    const patch={call,agency:String(values.get('agency')),type:String(values.get('type')),status:String(values.get('status')),
+      station:String(values.get('station')||'').trim(),crew:String(values.get('crew')||'').trim(),
+      caps:values.getAll('caps').map(String),lat:+lat,lng:+lng};
+    let entity=editId?getUnit(editId):null;
+    if(entity){Object.assign(entity,patch);record(entity.call,'Yksikön perustiedot päivitetty');}
+    else{entity={...patch,id:makeId('U'),taskId:null,createdAt:new Date().toISOString()};S.units.push(entity);record(entity.call,'Uusi yksikkö lisätty paikalliseen työtilaan');}
+    if(entity.taskId && (entity.status==='free'||entity.status==='unavailable')){record(entity.call,'Yksikkö irrotettu tehtävästä tilamuutoksen vuoksi');entity.taskId=null;}
+    S.selected={kind:'unit',id:entity.id};
+    closeModal();commit('Yksikkö tallennettu.');
+    return;
+  }
+  if(modalKind==='note') {
+    const note=String(values.get('note')||'').trim();
+    const target=selectedIncident()?.id||selectedUnit()?.call||'YLEINEN';
+    if(!note)return notify('Kirjoita tapahtumakirjaus.');
+    record(target,note.slice(0,1000));closeModal();commit('Kirjaus lisätty.');
+    return;
+  }
+}
+function noteModal() {
+  const selected=selectedIncident()||selectedUnit();
+  if(!selected)return notify('Valitse ensin tehtävä tai yksikkö.');
+  openModal('Uusi tapahtumakirjaus','note',
+    `<div class="form-note">Kohde: ${esc(selected.id||selected.call)} · vain paikallinen loki</div>
+     <div class="form-field full"><label for="noteField">Tapahtuman kuvaus</label><textarea name="note" id="noteField" maxlength="1000" rows="5" required></textarea></div>`);
+}
+function updateUnitStatus(u,newStatus) {
+  if(!u || !statuses[newStatus] || u.status===newStatus)return;
+  if(u.taskId && (newStatus==='free'||newStatus==='unavailable'))u.taskId=null;
+  u.status=newStatus;
+  record(u.call,`Tila: ${statuses[newStatus]}`);
+  commit(`Yksikön ${u.call} tila: ${statuses[newStatus]}`);
+}
+function assignUnit(incident,unit) {
+  if(!incident||!unit||unit.taskId||incident.status==='closed')return notify('Yksikköä ei voida liittää tähän tehtävään.');
+  unit.taskId=incident.id;
+  unit.status='alerted';
+  record(unit.call,`Liitetty tehtävään ${incident.code} / ${incident.id}`);
+  record(incident.id,`Yksikkö ${unit.call} liitetty tehtävälle`);
+  commit(`${unit.call} liitetty tehtävään.`);
+}
+function releaseUnit(unit) {
+  if(!unit||!unit.taskId)return;
+  const incident=unit.taskId;
+  unit.taskId=null;unit.status='free';
+  record(unit.call,'Tehtäväsidonta purettu / tila vapaa');
+  record(incident,`Yksikkö ${unit.call} irrotettu`);
+  commit(`${unit.call} vapautettu.`);
+}
+function toggleIncidentStatus(incident) {
+  if(!incident)return;
+  if(incident.status==='active') {
+    if(!confirm(`Päätetäänkö paikallinen tehtävä ${incident.code} (${incident.id})?`))return;
+    incident.status='closed';
+    for(const u of S.units.filter(x=>x.taskId===incident.id)){u.taskId=null;u.status='free';record(u.call,`Vapautettu päättyneeltä tehtävältä ${incident.id}`);}
+    record(incident.id,'Tehtävä päätetty');
+  } else {incident.status='active';record(incident.id,'Tehtävä avattu uudelleen');}
+  commit('Tehtävän tila päivitetty.');
+}
+function downloadJson() {
+  const data={format:'KEJO-tyyppinen-paikallinen-tyotila',version:3,exportedAt:new Date().toISOString(),state:S};
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download=`kenttatyoasema-${new Date().toISOString().slice(0,10)}.json`;document.body.append(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),800);
+  notify('Paikallinen työtila viety JSON-tiedostoon.');
+}
+async function importJson(file) {
+  if(!file || file.size>2_000_000)return notify('Tiedosto puuttuu tai on liian suuri (enintään 2 Mt).');
+  try {
+    const doc=JSON.parse(await file.text());
+    const state=doc.state;
+    if(doc.version!==3||!state||!Array.isArray(state.units)||!Array.isArray(state.incidents)||!Array.isArray(state.events))throw Error('Tiedostomuoto ei vastaa versiota 3.');
+    if(state.units.length>500||state.incidents.length>2000||state.events.length>5000)throw Error('Aineisto ylittää sallitut määrät.');
+    if(!confirm('Korvataanko nykyiset paikalliset tiedot tuodulla aineistolla?'))return;
+    S={...defaults(),...state,mapSettings:{...defaults().mapSettings,...state.mapSettings}};
+    S.incidents=S.incidents.filter(i=>validPos(i.lat,i.lng));
+    S.units=S.units.filter(u=>validPos(u.lat,u.lng));
+    S.features=Array.isArray(S.features)?S.features.filter(f=>f && (f.type==='point'||f.type==='line')).slice(0,250):[];
+    S.agencyFilter=['all','pelastus','ensihoito','poliisi'].includes(S.agencyFilter)?S.agencyFilter:'all';
+    S.mainTab=['situation','incidents','resources','map','log'].includes(S.mainTab)?S.mainTab:'situation';
+    S.detailTab=['general','units','events'].includes(S.detailTab)?S.detailTab:'general';
+    if(map){map.setView(S.mapCenter||center,S.mapZoom||11);configureLayers();}
+    commit('JSON-aineisto tuotu paikalliseen työtilaan.');
+  }catch(e){notify(`Tuonti epäonnistui: ${e.message}`);}
+}
+// ------------------------------- Käyttöliittymä -----------------------------
+function handleDetailsAction(action,button) {
+  const i=selectedIncident(),u=selectedUnit();
+  if(action==='focus')return focusSelected();
+  if(action==='copyCoords') {
+    if(!i)return;
+    const txt=`${i.lat.toFixed(6)}, ${i.lng.toFixed(6)}`;
+    if(navigator.clipboard?.writeText)navigator.clipboard.writeText(txt).then(()=>notify('Koordinaatit kopioitu.')).catch(()=>notify(txt));
+    else notify(txt);
+  }
+  if(action==='editIncident'&&i)return openIncidentModal(i);
+  if(action==='editUnit'&&u)return openUnitModal(u);
+  if(action==='addNote')return noteModal();
+  if(action==='toggleIncident'&&i)return toggleIncidentStatus(i);
+  if(action==='openStatusTab'&&u){S.detailTab='units';commit();return;}
+  if(action==='setUnitPoint'&&u){setPointerMode({type:'moveUnit',id:u.id});return;}
+  if(action==='setIncidentPoint'&&i){setPointerMode({type:'moveIncident',id:i.id});return;}
+  if(action==='saveStatus'&&u)return updateUnitStatus(u,$('#statusSelect')?.value);
+  if(action==='openUnitTask'&&u?.taskId)return selectEntity('incident',u.taskId);
+  if(action==='releaseSelectedUnit'&&u)return releaseUnit(u);
+  if(action==='removeUnit'&&i){
+    const target=getUnit(button.dataset.unit);
+    if(target?.taskId===i.id)return releaseUnit(target);
+  }
+  if(action==='assignUnit'&&i)return assignUnit(i,getUnit($('#assignUnitSelect')?.value));
+}
+function handleMainTab(tab) {
+  S.mainTab=tab;
+  if(tab==='incidents') {S.freeOnly=false;S.agencyFilter='all';$('#incidentRows').closest('.scroll-clip').scrollTop=0;}
+  if(tab==='resources') {S.showClosed=false;S.agencyFilter='all';}
+  if(tab==='map') {$('#layerPanel').hidden=false;$('#layerPanelButton').setAttribute('aria-expanded','true');}
+  if(tab==='log') $('#eventPane').classList.remove('is-collapsed');
+  commit();
+  if(tab==='map')setTimeout(()=>map?.invalidateSize(),20);
+}
+function attachListeners() {
+  $('#newIncidentBtn').addEventListener('click',()=>openIncidentModal());
+  $('#newUnitBtn').addEventListener('click',()=>openUnitModal());
+  $('#modalClose').addEventListener('click',closeModal);
+  $('#modalCancel').addEventListener('click',closeModal);
+  $('#modalBackdrop').addEventListener('click',e=>{if(e.target.id==='modalBackdrop')closeModal();});
+  $('#modalForm').addEventListener('submit',e=>{e.preventDefault();saveModal();});
+  $('#modalContent').addEventListener('change',e=>{
+    if(e.target.id==='form_agency') {
+      if(modalKind==='incident')updateCodeDatalist();
+      if(modalKind==='unit')updateUnitTypes();
+    }
+    if(e.target.id==='form_code')updateCodeTitle(true);
+  });
+  $('#modalContent').addEventListener('input',e=>{
+    if(e.target.id==='form_code')updateCodeTitle(true);
+  });
+  $('#incidentRows').addEventListener('click',e=>{
+    const row=e.target.closest('[data-select-incident]');if(row)selectEntity('incident',row.dataset.selectIncident);
+  });
+  $('#incidentRows').addEventListener('dblclick',e=>{
+    const row=e.target.closest('[data-select-incident]');if(row)selectEntity('incident',row.dataset.selectIncident,true);
+  });
+  $('#unitRows').addEventListener('click',e=>{
+    const row=e.target.closest('[data-select-unit]');if(row)selectEntity('unit',row.dataset.selectUnit);
+  });
+  $('#unitRows').addEventListener('dblclick',e=>{
+    const row=e.target.closest('[data-select-unit]');if(row)selectEntity('unit',row.dataset.selectUnit,true);
+  });
+  for(const el of [$('#incidentRows'),$('#unitRows')])el.addEventListener('keydown',e=>{
+    if(e.key==='Enter'){e.preventDefault();e.target.closest('tr')?.click();}
+  });
+  $('#agencyFilters').addEventListener('click',e=>{
+    const f=e.target.closest('[data-agency]');if(!f)return;
+    S.agencyFilter=f.dataset.agency;commit();
+  });
+  $('#showClosedBtn').addEventListener('click',()=>{S.showClosed=!S.showClosed;commit();});
+  $('#freeOnlyBtn').addEventListener('click',()=>{S.freeOnly=!S.freeOnly;commit();});
+  $('#globalSearch').addEventListener('input',e=>{S.search=e.target.value.trim();commit();});
+  $('#logSearch').addEventListener('input',e=>{S.logSearch=e.target.value;commit();});
+  $('#collapseLogBtn').addEventListener('click',()=>{
+    const collapsed=$('#eventPane').classList.toggle('is-collapsed');
+    $('#collapseLogBtn').textContent=collapsed?'Näytä ▴':'Piilota ▾';
+    setTimeout(()=>map?.invalidateSize(),40);
+  });
+  $('#detailsContent').addEventListener('click',e=>{
+    const btn=e.target.closest('[data-action]');
+    if(btn&&!btn.disabled)handleDetailsAction(btn.dataset.action,btn);
+  });
+  $$('.detail-tab').forEach(btn=>btn.addEventListener('click',()=>{S.detailTab=btn.dataset.detailTab;commit();}));
+  $$('.nav-tab').forEach(btn=>btn.addEventListener('click',()=>handleMainTab(btn.dataset.mainTab)));
+  $('#resetViewBtn').addEventListener('click',fitAll);
+  $('#exportBtn').addEventListener('click',downloadJson);
+  $('#importBtn').addEventListener('click',()=>$('#importFile').click());
+  $('#importFile').addEventListener('change',async e=>{await importJson(e.target.files[0]);e.target.value='';});
+  $('#settingsBtn').addEventListener('click',()=>{
+    const answer=confirm('ASETUKSET\n\nPalautetaanko kaikki paikalliset mallitehtävät, yksiköt, loki ja kartta-asetukset alkutilaan?\n\nPeruuta = älä muuta mitään.');
+    if(!answer)return;
+    S=defaults();if(map){map.setView(center,11);configureLayers();}
+    commit('Paikallinen mallitila palautettu.');
+  });
+  $('#layerPanelButton').addEventListener('click',()=>{
+    const panel=$('#layerPanel');panel.hidden=!panel.hidden;
+    $('#layerPanelButton').setAttribute('aria-expanded',String(!panel.hidden));
+    $('#layerPanelButton').classList.toggle('active',!panel.hidden);
+  });
+  $('#closeLayerPanel').addEventListener('click',()=>{
+    $('#layerPanel').hidden=true;$('#layerPanelButton').setAttribute('aria-expanded','false');$('#layerPanelButton').classList.remove('active');
+  });
+  $$('.layer-option input[name="basemap"]').forEach(el=>el.addEventListener('change',e=>{if(e.target.checked)changeBasemap(e.target.value);}));
+  $$('.layer-option input[data-layer]').forEach(el=>el.addEventListener('change',e=>toggleLayer(e.target.dataset.layer,e.target.checked)));
+  $('#layerOpacity').addEventListener('input',e=>{S.mapSettings.opacity=Number(e.target.value);updateOpacity();});
+  $('#applyMmlKey').addEventListener('click',()=>{
+    const key=$('#mmlKey').value.trim();
+    if(!key){notify('Syötä ensin oma MML API-avain.');return;}
+    mmlApiKey=key;
+    try{sessionStorage.setItem('kenttatyoasema_mml_key',key);}catch{}
+    buildMmlLayer();changeBasemap('mml');
+    $('#layerNote').textContent='MML-maastokartta käytössä omalla API-avaimella. Julkinen WMTS-palvelu saattaa rajoittaa tai estää pyyntöjä.';
+  });
+  $('#toggleTaskMarkers').addEventListener('click',()=>{S.mapSettings.showTasks=!S.mapSettings.showTasks;configureLayers();});
+  $('#toggleUnitMarkers').addEventListener('click',()=>{S.mapSettings.showUnits=!S.mapSettings.showUnits;configureLayers();});
+  $('#pointButton').addEventListener('click',()=>{
+    if(!map)return notify('Kartta ei ole käytettävissä.');
+    setPointerMode(pointerMode?.type==='newIncident'?null:{type:'newIncident'});
+  });
+  $('#measureButton').addEventListener('click',()=>{
+    if(!map)return notify('Kartta ei ole käytettävissä.');
+    if(pointerMode?.type==='measure')endMeasure();
+    else setPointerMode({type:'measure'});
+  });
+  // Popupit ovat karttakirjaston luomaa HTML:ää, joten kuuntelemme delegoidusti.
+  document.addEventListener('click',e=>{
+    const open=e.target.closest('[data-map-select]');
+    if(open){selectEntity(open.dataset.mapSelect,open.dataset.id);}
+    const del=e.target.closest('[data-delete-feature]');
+    if(del){
+      S.features=S.features.filter(f=>f.id!==del.dataset.deleteFeature);
+      record('KARTTA','Oma paikkamerkintä poistettu');commit('Merkintä poistettu.');
+    }
+  });
+  document.addEventListener('keydown',e=>{
+    const typing=/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName||'');
+    if(e.key==='Escape') {
+      if(!$('#modalBackdrop').hidden){closeModal();return;}
+      if(pointerMode?.type==='measure'){endMeasure();return;}
+      if(pointerMode){setPointerMode(null);return;}
+    }
+    if(e.key==='F2') {e.preventDefault();openIncidentModal();}
+    if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();$('#globalSearch').focus();$('#globalSearch').select();}
+    if(!typing&&e.key.toLowerCase()==='m'&&e.altKey){e.preventDefault();$('#layerPanelButton').click();}
+  });
+}
+function initialize() {
+  $('#systemClock').textContent=new Date().toLocaleTimeString('fi-FI');
+  setInterval(()=>$('#systemClock').textContent=new Date().toLocaleTimeString('fi-FI'),1000);
+  attachListeners();
+  prepareMap();
+  render();
+  if(S.mapSettings.base==='topo')$('#layerNote').textContent='Maastokartta sisältää korkeuskäyriä ja maastokohteita. SYKE-syvyysaineiston kattavuus on rajallinen.';
+}
+initialize();
 })();
