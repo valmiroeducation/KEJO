@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <meta name="theme-color" content="#263544" />
+  <title>KEJO / kenttätilanne – paikallinen käyttöliittymämalli</title>
+  <link rel="preconnect" href="https://unpkg.com" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="workspace">
+  <header class="titlebar">
+    <div class="brand"><div class="brandmark">K</div><div class="brandtext"><strong>KEJO</strong><small>KENTTÄTILANNE</small></div></div>
+    <span class="notice">EPÄVIRALLINEN KÄYTTÖLIITTYMÄMALLI · KUVITTEELLISET TIEDOT</span>
+    <div class="right-title"><span class="offline"><span class="offline-dot"></span> PAIKALLINEN TILA</span><span id="clock">--.--.----  --:--:--</span></div>
+  </header>
+  <nav class="menubar" aria-label="Päävalikko">
+    <div class="menu-links">
+      <button class="menu active" data-view="tilannekuva">Tilannekuva</button>
+      <button class="menu" data-view="tehtavat">Tehtävät</button>
+      <button class="menu" data-view="yksikot">Yksiköt</button>
+      <button class="menu" data-view="tapahtumat">Tapahtumat</button>
+    </div>
+    <div class="menu-utilities">
+      <button class="top-btn" id="openSettings" title="Sovelluksen asetukset">⚙ <span>Asetukset</span></button>
+      <button class="top-btn" id="resetData" title="Palauta esimerkkitiedot">↺ <span>Palauta</span></button>
+    </div>
+  </nav>
+  <div class="actionbar">
+    <div class="action-buttons">
+      <button id="newIncidentBtn" class="action primary"><b>＋</b> Uusi tehtävä <kbd>F2</kbd></button>
+      <button id="newUnitBtn" class="action"><b>＋</b> Lisää yksikkö</button>
+      <span class="bar-separator"></span>
+      <button id="zoomToIncident" class="action"><b>◎</b> Näytä kohde</button>
+      <button id="zoomToAll" class="action"><b>▣</b> Sovita karttaan</button>
+      <button id="exportData" class="action"><b>⇩</b> Vie tiedot</button>
+      <button id="importData" class="action"><b>⇧</b> Tuo tiedot</button>
+      <input type="file" id="importInput" accept=".json,application/json" hidden />
+    </div>
+    <div class="action-search"><span>⌕</span><input id="globalSearch" type="search" placeholder="Hae tehtävää, osoitetta tai yksikköä..." aria-label="Haku" /><kbd>Ctrl K</kbd></div>
+  </div>
+  <div class="content-layout">
+    <aside class="left-pane">
+      <section class="pane incidents-pane" id="incidentsPane">
+        <div class="pane-header"><strong>TEHTÄVÄT</strong><span class="count" id="incidentCount">0</span><button class="pane-tool" id="toggleClosed" title="Näytä myös päättyneet">◷ <span id="closedToggleLabel">Aktiiviset</span></button></div>
+        <div class="filters" id="agencyFilters"><button class="chip selected" data-agency="all">Kaikki</button><button class="chip" data-agency="pelastus">PEL</button><button class="chip" data-agency="ensihoito">ENS</button><button class="chip" data-agency="poliisi">POL</button></div>
+        <div class="table-wrap">
+          <table class="data-table" aria-label="Tehtäväluettelo"><thead><tr><th class="time-col">KLO</th><th class="code-col">KOODI</th><th>PAIKKA / TEHTÄVÄ</th><th class="prio-col">LK</th></tr></thead><tbody id="incidentsTbody"></tbody></table>
+        </div>
+        <div class="pane-footer"><span id="filteredIncidents">0 näkyvissä</span><span>Kaksoisnapsautus: kartalle</span></div>
+      </section>
+      <section class="pane units-pane" id="unitsPane">
+        <div class="pane-header"><strong>YKSIKÖT</strong><span class="count" id="unitCount">0</span><button class="pane-tool" id="freeOnly"><span id="freeOnlyText">Kaikki tilat</span> ▾</button></div>
+        <div class="table-wrap">
+          <table class="data-table" aria-label="Yksikköluettelo"><thead><tr><th>TUNNUS</th><th>TOIMIALA</th><th>TILA</th><th>TEHTÄVÄ</th></tr></thead><tbody id="unitsTbody"></tbody></table>
+        </div>
+        <div class="pane-footer"><span id="unitsFooter">0 yksikköä</span><span>Tilat päivittyvät paikallisesti</span></div>
+      </section>
+    </aside>
+    <main class="map-area" id="mapArea">
+      <div class="map-header"><div class="map-head-left"><strong>TILANNEKARTTA</strong><span class="map-sub" id="mapAreaLabel">Joensuu / ympäristö</span></div><div class="map-actions"><button class="map-toggle on" id="toggleUnits" aria-pressed="true">■ Yksiköt</button><button class="map-toggle on" id="toggleTasks" aria-pressed="true">● Tehtävät</button><button class="map-toggle" id="choosePoint" title="Valitse uuden tehtävän sijainti kartalta">⌖ Piste kartalta</button></div></div>
+      <div class="map-frame" id="mapFrame"><div id="map"></div><div id="mapFallback" class="fallback" hidden><div class="fallback-grid"></div><strong>Karttapalvelua ei voitu avata</strong><p>Tarkista internetyhteys. Tehtävien ja yksiköiden tiedot ovat silti käytettävissä.</p></div><div class="map-indicator"><span class="square"></span> PAIKALLINEN TIETO · EI VIRANOMAISYHTEYTTÄ</div><div class="map-coordinates" id="mapCoordinates">WGS84 / Sijainti –</div><div class="map-guide" id="mapGuide" hidden>Valitse sijainti napsauttamalla karttaa. Esc peruu.</div></div>
+      <div class="map-bottom"><span id="mapZoom">Kartta</span><span>Taustakartta © OpenStreetMapin tekijät</span></div>
+    </main>
+    <aside class="detail-pane">
+      <div class="detail-title"><strong id="detailHeading">TEHTÄVÄTIEDOT</strong><span id="detailId">Ei valintaa</span></div>
+      <div class="detail-tabs"><button class="detail-tab selected" data-tab="info">Tehtävä</button><button class="detail-tab" data-tab="resources">Yksiköt</button><button class="detail-tab" data-tab="history">Tapahtumat</button></div>
+      <div class="detail-body" id="detailBody"></div>
+    </aside>
+  </div>
+  <section class="bottom-area" id="bottomArea"><div class="bottom-header"><strong>TAPAHTUMALOKI</strong><span class="count" id="logCount">0</span><label class="bottom-search">Hae: <input id="logSearch" placeholder="Suodata kirjauksia" /></label><button id="clearLogSearch" class="pane-tool" title="Tyhjennä lokin haku">✕</button><button id="toggleLog" class="pane-tool" title="Näytä/piilota tapahtumaloki">▾</button></div><div class="log-scroller"><table class="log-table"><thead><tr><th>AIKA</th><th>KOHTEEN TUNNUS</th><th>TAPAHTUMA / MERKINTÄ</th></tr></thead><tbody id="logTbody"></tbody></table></div></section>
+  <footer class="statusbar"><span><span class="status-dot"></span> SOVELLUS VALMIS</span><span id="statusMessage">Tiedot tallennetaan tämän selaimen paikalliseen tallennustilaan.</span><span>KEJO-tyyppinen käyttöliittymämalli · v2.0</span></footer>
+</div>
+<div class="modal-backdrop" id="modalBackdrop" hidden><div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="modal-title"><strong id="modalTitle">Uusi tehtävä</strong><button id="closeModal" class="close" aria-label="Sulje">✕</button></div><form id="modalForm"><div id="modalFields"></div><div class="modal-foot"><button type="button" class="action" id="cancelModal">Peruuta</button><button type="submit" class="action primary" id="modalSubmit">Tallenna</button></div></form></div></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
